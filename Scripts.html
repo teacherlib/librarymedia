@@ -1,0 +1,21 @@
+<script>
+/* TRL · Scripts.html — bootstrap loader (injects inert blocks → TRL.start) */
+(function () {
+  function setText(t) { var e = document.getElementById('boot-text'); if (e) e.textContent = t; }
+  function start() {
+    setText('กำลังโหลดสคริปต์หลัก…');
+    var blocks = document.querySelectorAll('script[type="text/x-trl"]');
+    if (!blocks.length) { setText('ไม่พบสคริปต์หลัก'); return; }
+    try {
+      for (var i = 0; i < blocks.length; i++) {
+        var src = blocks[i].textContent || ''; if (!src) continue;
+        var s = document.createElement('script'); s.text = src; document.body.appendChild(s);
+      }
+    } catch (e) { setText('เกิดข้อผิดพลาดในการโหลด: ' + e.message); if (window.console) console.error(e); return; }
+    if (window.TRL && typeof window.TRL.start === 'function') {
+      try { window.TRL.start(); } catch (e2) { setText('เริ่มระบบไม่สำเร็จ: ' + e2.message); if (window.console) console.error(e2); }
+    } else { setText('ไม่พบ TRL.start — สคริปต์หลักโหลดไม่สำเร็จ'); }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, false); else start();
+})();
+</script>

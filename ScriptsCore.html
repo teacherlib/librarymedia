@@ -1,0 +1,738 @@
+<script id="trl-core" type="text/x-trl">
+/* ═══════════════════════════════════════════════════════════════
+   TRL · ScriptsCore.html — boot · router · shell · login · landing · helpers
+   (inert block — injected by Scripts.html bootstrap)
+   ═══════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+
+  var Store = { token: null, user: null, caps: [], boot: {}, home: null, clockTimer: null };
+  var Routes = {};
+  var ACTIONS = {};
+
+  /* ── tiny dom helpers ── */
+  function $(s, r) { return (r || document).querySelector(s); }
+  function $$(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); }
+  function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function el(tag, cls, html) { var e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
+
+  /* ── number / format ── */
+  function fmtNum(n) { n = Number(n) || 0; return n.toLocaleString('en-US'); }
+  function fmtBytes(b) { b = Number(b) || 0; if (b < 1024) return b + ' B'; if (b < 1048576) return (b / 1024).toFixed(0) + ' KB'; return (b / 1048576).toFixed(1) + ' MB'; }
+
+  /* ── TH date (Buddhist era) ── */
+  var TH = {
+    M: ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'],
+    MS: ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'],
+    WD: ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'],
+    WS: ['อา.', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.'],
+    parse: function (v) { if (v instanceof Date) return v; if (!v) return null; var d = new Date(v); return isNaN(d.getTime()) ? null : d; },
+    p2: function (x) { x = String(x); return x.length < 2 ? '0' + x : x; },
+    date: function (v) { var d = this.parse(v); if (!d) return '-'; return d.getDate() + ' ' + this.MS[d.getMonth()] + ' ' + (d.getFullYear() + 543); },
+    dateLong: function (v) { var d = this.parse(v); if (!d) return '-'; return d.getDate() + ' ' + this.M[d.getMonth()] + ' ' + (d.getFullYear() + 543); },
+    dateFull: function (v) { var d = this.parse(v); if (!d) return '-'; return 'วัน' + this.WD[d.getDay()] + 'ที่ ' + d.getDate() + ' ' + this.M[d.getMonth()] + ' ' + (d.getFullYear() + 543); },
+    time: function (v) { var d = this.parse(v); if (!d) return '-'; return this.p2(d.getHours()) + ':' + this.p2(d.getMinutes()) + ' น.'; },
+    dateTime: function (v) { var d = this.parse(v); if (!d) return '-'; return this.date(v) + ' ' + this.time(v); },
+    relative: function (v) {
+      var d = this.parse(v); if (!d) return '-';
+      var s = (Date.now() - d.getTime()) / 1000;
+      if (s < 0) return this.date(v);
+      if (s < 60) return 'เมื่อสักครู่';
+      if (s < 3600) return Math.floor(s / 60) + ' นาทีที่แล้ว';
+      if (s < 86400) return Math.floor(s / 3600) + ' ชั่วโมงที่แล้ว';
+      if (s < 2592000) return Math.floor(s / 86400) + ' วันที่แล้ว';
+      return this.date(v);
+    },
+    smart: function (v) { var d = this.parse(v); if (!d) return '-'; return (Date.now() - d.getTime() < 7 * 86400000) ? this.relative(v) : this.date(v); }
+  };
+
+  /* ── google.script.run with timeout ── */
+  function call(action, payload, timeout) {
+    timeout = timeout || 25000;
+    return new Promise(function (resolve, reject) {
+      var settled = false;
+      var to = setTimeout(function () { if (!settled) { settled = true; reject(new Error('การเชื่อมต่อหมดเวลา (' + Math.round(timeout / 1000) + ' วิ) — ' + action)); } }, timeout);
+      try {
+        if (!window.google || !google.script || !google.script.run) { clearTimeout(to); return reject(new Error('ไม่พบ google.script.run — โปรดเปิดผ่าน URL ของ Web App')); }
+        google.script.run
+          .withSuccessHandler(function (res) { if (settled) return; settled = true; clearTimeout(to); if (!res) return reject(new Error('ไม่ได้รับคำตอบจากเซิร์ฟเวอร์')); if (res.ok) resolve(res.data); else reject(new Error(res.error || 'เกิดข้อผิดพลาด')); })
+          .withFailureHandler(function (e) { if (settled) return; settled = true; clearTimeout(to); reject(new Error(e && e.message ? e.message : String(e))); })
+          .api({ action: action, token: Store.token, payload: payload || {} });
+      } catch (e) { clearTimeout(to); if (!settled) { settled = true; reject(e); } }
+    });
+  }
+
+  /* ── RBAC mirror ── */
+  function hasCap(cap) {
+    if (!cap || cap === '*') return true;
+    var caps = Store.caps || [];
+    return String(cap).split('|').some(function (c) {
+      c = String(c || '').trim(); if (!c) return false; if (c === '*') return true;
+      if (caps.indexOf(c) >= 0) return true;
+      if (/\.(view_own|edit_own|delete_own|view_self|edit_self|create_own|cancel_own)$/.test(c)) return false;
+      var dot = c.indexOf('.'); if (dot > 0) { var p = c.substring(0, dot); if (caps.indexOf(p + '.manage') >= 0) return true; }
+      return false;
+    });
+  }
+
+  /* ── toast ── */
+  function toast(msg, type, dur, title) {
+    type = type || 'success';
+    var host = $('#toast-host'); if (!host) return;
+    var ic = { success: 'bi-check-circle-fill', error: 'bi-x-circle-fill', warning: 'bi-exclamation-triangle-fill', info: 'bi-info-circle-fill' }[type] || 'bi-info-circle-fill';
+    var t = el('div', 'toast ' + type, '<i class="bi ' + ic + ' ti"></i><div>' + (title ? '<b>' + esc(title) + '</b>' : '') + '<span>' + esc(msg) + '</span></div>');
+    host.appendChild(t);
+    setTimeout(function () { t.classList.add('out'); setTimeout(function () { t.remove(); }, 300); }, dur || 3200);
+  }
+
+  /* ── Spinner (quantum) ── */
+  var Spinner = {
+    _t: null, _stages: null, _i: 0,
+    show: function (msg, opts) {
+      opts = opts || {};
+      var host = $('#spin-host'); if (!host) return;
+      host.innerHTML = '<div class="qspin"><div class="qrings"><div class="r r1"></div><div class="r r2"></div><div class="r r3"></div><div class="core"><i class="bi bi-collection-play-fill"></i></div></div>'
+        + '<div class="msg">' + esc(msg || 'กำลังดำเนินการ') + '</div><div class="sub" id="spin-sub"></div><div class="qbar"><i></i></div></div>';
+      host.hidden = false;
+      this._stages = opts.stages || null; this._i = 0;
+      if (this._t) clearInterval(this._t);
+      if (this._stages) {
+        var self = this; var sub = $('#spin-sub'); if (sub) sub.textContent = this._stages[0];
+        this._t = setInterval(function () { self._i = (self._i + 1) % self._stages.length; var s = $('#spin-sub'); if (s) s.textContent = self._stages[self._i]; }, 900);
+      }
+    },
+    update: function (msg) { var m = $('#spin-host .msg'); if (m) m.textContent = msg; },
+    hide: function () { if (this._t) { clearInterval(this._t); this._t = null; } var host = $('#spin-host'); if (host) { host.hidden = true; host.innerHTML = ''; } }
+  };
+
+  /* ── Modal ── */
+  var Modal = {
+    open: function (opts) {
+      opts = opts || {};
+      var host = $('#modal-host'); if (!host) return;
+      var cls = 'modal-card' + (opts.size ? ' ' + opts.size : '');
+      var head = opts.title != null ? '<div class="md-head"><div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>'
+        + (opts.titleIcon ? '<i class="bi ' + esc(String(opts.titleIcon).replace(/[^a-z0-9-]/gi, '')) + '" style="color:var(--accent);font-size:18px"></i>' : '')
+        + '<div class="md-title">' + esc(opts.title) + '</div><button class="md-close" data-modal-close><i class="bi bi-x-lg"></i></button></div>' : '';
+      var foot = opts.footer ? '<div class="md-foot">' + opts.footer + '</div>' : '';
+      host.innerHTML = '<div class="' + cls + '">' + head + '<div class="md-body">' + (opts.html || '') + '</div>' + foot + '</div>';
+      host.classList.add('is-open');
+      if (opts.onOpen) try { opts.onOpen(host); } catch (e) {}
+    },
+    close: function () { var host = $('#modal-host'); if (host) { host.classList.remove('is-open'); host.innerHTML = ''; } }
+  };
+
+  function confirmModal(o) {
+    o = o || {};
+    return new Promise(function (resolve) {
+      Modal.open({
+        title: o.title || 'ยืนยันการทำงาน', size: '',
+        html: '<div style="display:flex;gap:14px;align-items:flex-start"><div style="width:48px;height:48px;border-radius:14px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:24px;color:#fff;background:' + (o.danger ? 'linear-gradient(135deg,#ff453a,#ff375f)' : 'var(--grad)') + '"><i class="bi ' + (o.danger ? 'bi-exclamation-triangle-fill' : 'bi-question-circle-fill') + '"></i></div><div style="flex:1;font-size:14px;line-height:1.6;color:var(--ink2);padding-top:4px">' + (o.message || 'คุณแน่ใจหรือไม่?') + '</div></div>',
+        footer: '<button class="btn btn-ghost" data-cm="0">' + esc(o.cancelText || 'ยกเลิก') + '</button><button class="btn ' + (o.danger ? 'btn-danger' : 'btn-primary') + '" data-cm="1">' + esc(o.okText || 'ยืนยัน') + '</button>',
+        onOpen: function (host) {
+          $$('[data-cm]', host).forEach(function (b) { b.addEventListener('click', function () { var v = b.getAttribute('data-cm') === '1'; Modal.close(); resolve(v); }); });
+        }
+      });
+    });
+  }
+
+  /* ── multi-state submit ── */
+  function submitState(btn, state, label) {
+    if (!btn) return;
+    if (state === 'loading') {
+      if (btn.dataset._html == null) btn.dataset._html = btn.innerHTML;
+      btn.dataset.state = 'loading'; btn.disabled = true; btn.setAttribute('aria-busy', 'true');
+      btn.innerHTML = '<span class="st"><span class="spin-inline"></span> ' + (label || 'กำลังดำเนินการ…') + '</span>';
+    } else if (state === 'success') {
+      btn.dataset.state = 'success'; btn.disabled = true;
+      btn.innerHTML = '<span class="st"><i class="bi bi-check-lg"></i> ' + (label || 'สำเร็จ') + '</span>';
+      setTimeout(function () { submitState(btn, 'idle'); }, 1100);
+    } else if (state === 'error') {
+      btn.dataset.state = 'error'; btn.disabled = true;
+      btn.innerHTML = '<span class="st"><i class="bi bi-x-lg"></i> ' + (label || 'ไม่สำเร็จ') + '</span>';
+      setTimeout(function () { submitState(btn, 'idle'); }, 1600);
+    } else {
+      delete btn.dataset.state; btn.disabled = false; btn.removeAttribute('aria-busy');
+      if (btn.dataset._html != null) { btn.innerHTML = btn.dataset._html; delete btn.dataset._html; }
+    }
+  }
+  function runBtn(btn, opts, fn) {
+    opts = opts || {};
+    if (btn && btn.dataset.state === 'loading') return Promise.resolve();
+    submitState(btn, 'loading', opts.loading);
+    return Promise.resolve().then(fn)
+      .then(function (r) { submitState(btn, 'success', opts.success); if (opts.ok) toast(opts.ok, 'success'); return r; })
+      .catch(function (e) { submitState(btn, 'error', opts.error); toast((e && e.message) || 'เกิดข้อผิดพลาด', 'error', 4500); throw e; });
+  }
+
+  /* ── theme ── */
+  function applyTheme() {
+    var s = (Store.boot && Store.boot.settings) || {};
+    var t = String(s.theme || 'blue'); if (!/^[a-z]+$/.test(t)) t = 'blue';
+    document.documentElement.setAttribute('data-theme', t);
+  }
+
+  /* ── UI atoms ── */
+  function avatarHtml(name, src, cls) {
+    var ini = (String(name || '?').trim().charAt(0) || '?');
+    return '<div class="avatar' + (cls ? ' ' + cls : '') + '">' + (src ? '<img src="' + esc(src) + '" referrerpolicy="no-referrer" alt="">' : esc(ini)) + '</div>';
+  }
+  function roleChip(role, label) { return '<span class="role-chip role-' + esc(role) + '"><i class="bi bi-shield-check"></i> ' + esc(label || role) + '</span>'; }
+  function statusBadge(st, label) {
+    var ic = { draft: 'bi-pencil', pending: 'bi-hourglass-split', approved: 'bi-check-circle-fill', rejected: 'bi-arrow-counterclockwise' }[st] || 'bi-circle';
+    return '<span class="badge b-' + esc(st) + '"><i class="bi ' + ic + '"></i> ' + esc(label || st) + '</span>';
+  }
+  function starsHtml(rating, count) {
+    var full = Math.round(Number(rating) || 0), h = '';
+    for (var i = 1; i <= 5; i++) h += '<i class="bi ' + (i <= full ? 'bi-star-fill' : 'bi-star') + '"></i>';
+    return '<span class="stars' + (full ? '' : ' muted') + '">' + h + '</span>' + (count ? ' <small style="color:var(--muted)">(' + count + ')</small>' : '');
+  }
+  function gradStyle(color) { return 'background:linear-gradient(135deg,' + (color || '#64748b') + ',' + shade(color || '#64748b', -22) + ')'; }
+  function shade(hex, p) {
+    hex = String(hex).replace('#', ''); if (hex.length === 3) hex = hex.split('').map(function (c) { return c + c; }).join('');
+    var n = parseInt(hex, 16), r = (n >> 16) + Math.round(255 * p / 100), g = ((n >> 8) & 255) + Math.round(255 * p / 100), b = (n & 255) + Math.round(255 * p / 100);
+    function cl(x) { return Math.max(0, Math.min(255, x)); }
+    return '#' + ((1 << 24) + (cl(r) << 16) + (cl(g) << 8) + cl(b)).toString(16).slice(1);
+  }
+
+  /* ── charts (pure SVG) ── */
+  function barRows(items, max) {
+    if (!items || !items.length) return '<div class="empty" style="padding:24px"><p>ยังไม่มีข้อมูล</p></div>';
+    var mx = max || Math.max.apply(null, items.map(function (i) { return i.value; })) || 1;
+    return items.slice(0, 8).map(function (it) {
+      var w = Math.max(3, Math.round(it.value / mx * 100));
+      var c = it.color || 'var(--accent)';
+      return '<div class="bar-row"><div class="bl" title="' + esc(it.label) + '">' + esc(it.label) + '</div><div class="bar-track"><div class="bar-fill" style="width:' + w + '%;background:linear-gradient(90deg,' + c + ',' + shade(c, -15) + ')">' + it.value + '</div></div></div>';
+    }).join('');
+  }
+  function svgDonut(items) {
+    var total = items.reduce(function (a, b) { return a + b.value; }, 0);
+    if (!total) return '<div style="display:flex;align-items:center;justify-content:center;height:160px;color:var(--muted)"><svg width="150" height="150" viewBox="0 0 42 42"><circle cx="21" cy="21" r="15.9" fill="none" stroke="#e8e8ee" stroke-width="6"></circle></svg></div>';
+    var off = 0, arcs = items.map(function (it) {
+      var pct = it.value / total * 100; var dash = pct + ' ' + (100 - pct);
+      var seg = '<circle cx="21" cy="21" r="15.9" fill="none" stroke="' + (it.color || 'var(--accent)') + '" stroke-width="6" stroke-dasharray="' + dash + '" stroke-dashoffset="' + (25 - off) + '"></circle>';
+      off += pct; return seg;
+    }).join('');
+    return '<div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap"><svg width="140" height="140" viewBox="0 0 42 42" style="flex-shrink:0"><circle cx="21" cy="21" r="15.9" fill="none" stroke="#eef0f4" stroke-width="6"></circle>' + arcs + '<text x="21" y="20" text-anchor="middle" font-size="6" font-weight="800" fill="var(--ink)">' + total + '</text><text x="21" y="26" text-anchor="middle" font-size="3" fill="var(--muted)">รายการ</text></svg>'
+      + '<div class="don-legend" style="flex:1;min-width:140px">' + items.map(function (it) { return '<div class="li"><span class="dot" style="background:' + (it.color || 'var(--accent)') + '"></span>' + esc(it.label) + '<span class="pct">' + Math.round(it.value / total * 100) + '%</span></div>'; }).join('') + '</div></div>';
+  }
+  function svgLine(trend) {
+    if (!trend || !trend.length) return '<div class="empty"><p>ยังไม่มีข้อมูล</p></div>';
+    var w = 560, h = 160, pad = 26;
+    var maxV = Math.max(1, Math.max.apply(null, trend.map(function (d) { return Math.max(d.created || 0, d.downloads || 0); })));
+    function pts(key) {
+      return trend.map(function (d, i) { var x = pad + (w - pad * 2) * i / (trend.length - 1); var y = h - pad - (h - pad * 2) * (d[key] || 0) / maxV; return x.toFixed(1) + ',' + y.toFixed(1); }).join(' ');
+    }
+    var area = 'M' + pad + ',' + (h - pad) + ' L' + pts('downloads').replace(/ /g, ' L') + ' L' + (w - pad) + ',' + (h - pad) + ' Z';
+    return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="xMidYMid meet" width="100%" height="180" style="overflow:visible">'
+      + '<defs><linearGradient id="lg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".28"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>'
+      + '<path d="' + area + '" fill="url(#lg)"/>'
+      + '<polyline points="' + pts('downloads') + '" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>'
+      + '<polyline points="' + pts('created') + '" fill="none" stroke="var(--violet)" stroke-width="2" stroke-dasharray="4 4" stroke-linecap="round"/>'
+      + '</svg><div style="display:flex;gap:16px;font-size:12px;color:var(--muted2);margin-top:6px"><span><i class="bi bi-circle-fill" style="color:var(--accent);font-size:8px"></i> ดาวน์โหลด</span><span><i class="bi bi-circle-fill" style="color:var(--violet);font-size:8px"></i> เพิ่มสื่อ</span></div>';
+  }
+  function resThumb(r) {
+    if (r.thumbnail) return '<div class="res-thumb" style="' + gradStyle(r.type_color) + '"><img src="' + esc(r.thumbnail) + '" referrerpolicy="no-referrer" alt="" onerror="this.style.display=\'none\'"></div>';
+    return '<div class="res-thumb" style="' + gradStyle(r.type_color) + '"><i class="bi ' + esc(r.type_icon || 'bi-collection') + ' ph"></i></div>';
+  }
+
+  /* ── empty / skeleton ── */
+  function emptyHtml(icon, h, p, cta) {
+    return '<div class="empty"><div class="ic"><i class="bi ' + (icon || 'bi-inbox') + '"></i></div><h3>' + esc(h || 'ยังไม่มีข้อมูล') + '</h3><p>' + esc(p || '') + '</p>' + (cta || '') + '</div>';
+  }
+  function skCards(n) {
+    var h = ''; for (var i = 0; i < (n || 8); i++) h += '<div class="res-card"><div class="sk" style="height:140px;border-radius:0"></div><div style="padding:13px"><div class="sk" style="height:12px;width:50%;margin-bottom:8px"></div><div class="sk" style="height:16px;width:90%;margin-bottom:8px"></div><div class="sk" style="height:11px;width:60%"></div></div></div>';
+    return '<div class="res-grid">' + h + '</div>';
+  }
+
+  /* ════════ LANDING ════════ */
+  function renderLanding() {
+    stopClock();
+    var root = $('#app-root'); root.className = '';
+    var s = (Store.boot && Store.boot.settings) || {};
+    var st = (Store.boot && Store.boot.public_stats) || { resources: 0, downloads: 0, teachers: 0, categories: 0 };
+    var heroImg = s.hero_image ? '<div class="lp-hero-bg" style="background-image:url(' + esc(s.hero_image) + ')"></div>' : '';
+    root.innerHTML =
+      '<div class="lp">'
+      + '<nav class="lp-nav"><div class="lp-nav-in">'
+      + '<div class="lp-logo" data-hash="#top"><div class="ic"><i class="bi bi-collection-play-fill"></i></div><b>' + esc(s.hero_title || APP_NAME()) + '</b></div>'
+      + '<div class="lp-menu"><a data-act="scroll" data-target="cats">หมวดหมู่</a><a data-act="scroll" data-target="featured">สื่อแนะนำ</a><a data-act="scroll" data-target="recent">มาใหม่</a>'
+      + '<a class="lp-login btn btn-primary btn-sm" data-act="to-login" style="margin-left:8px"><i class="bi bi-box-arrow-in-right"></i> เข้าสู่ระบบ</a></div>'
+      + '</div></nav>'
+      + '<header class="lp-hero" id="top">' + heroImg + '<div class="lp-hero-in">'
+      + '<div class="lp-badge"><span class="dot"></span> ระบบคลังสื่อการสอนออนไลน์ · สพฐ.</div>'
+      + '<h1>' + esc(s.hero_title || 'คลังสื่อการสอน') + '</h1>'
+      + '<p>' + esc(s.hero_subtitle || 'แหล่งรวมสื่อการเรียนการสอนคุณภาพ ค้นหา ดาวน์โหลด และแบ่งปันได้ทันที') + '</p>'
+      + '<div class="lp-cta"><a class="btn btn-light" data-act="to-login"><i class="bi bi-box-arrow-in-right"></i> เข้าสู่ระบบ</a>'
+      + '<a class="btn btn-glass" data-act="scroll" data-target="featured"><i class="bi bi-grid-3x3-gap"></i> สำรวจสื่อ</a></div>'
+      + '<div class="lp-counters">'
+      + counterHtml('bi-collection', st.resources, 'สื่อการสอน')
+      + counterHtml('bi-download', st.downloads, 'ดาวน์โหลด')
+      + counterHtml('bi-people', st.teachers, 'ครูผู้ใช้')
+      + counterHtml('bi-folder2-open', st.categories, 'กลุ่มสาระ')
+      + '</div></div></header>'
+      + '<section class="lp-section" id="cats"><div class="lp-sh"><h2>กลุ่มสาระการเรียนรู้</h2><p>เลือกหมวดสื่อที่ต้องการ</p></div><div class="lp-cats" id="lp-cats">' + skLpCats() + '</div></section>'
+      + '<section class="lp-section" id="featured" style="padding-top:0"><div class="lp-sh"><h2>สื่อแนะนำ</h2><p>สื่อยอดนิยมที่ครูเลือกใช้</p></div><div class="lp-grid" id="lp-featured">' + skCards(6) + '</div></section>'
+      + '<section class="lp-section" id="recent" style="padding-top:0"><div class="lp-sh"><h2>มาใหม่ล่าสุด</h2><p>อัปเดตสื่อใหม่ทุกวัน</p></div><div class="lp-grid" id="lp-recent">' + skCards(4) + '</div></section>'
+      + landingFoot()
+      + '</div>';
+    loadLanding();
+  }
+  function APP_NAME() { return (Store.boot && Store.boot.app && Store.boot.app.name) || 'คลังสื่อการสอน'; }
+  function counterHtml(icon, val, label) {
+    return '<div class="lp-counter"><b data-count="' + (Number(val) || 0) + '">0</b><small><i class="bi ' + icon + '"></i> ' + esc(label) + '</small></div>';
+  }
+  function skLpCats() { var h = ''; for (var i = 0; i < 8; i++) h += '<div class="lp-cat"><div class="sk" style="width:52px;height:52px;border-radius:15px;margin:0 auto 12px"></div><div class="sk" style="height:14px;width:70%;margin:0 auto"></div></div>'; return h; }
+  function landingFoot() {
+    var d = (Store.boot && Store.boot.dev) || {};
+    var app = (Store.boot && Store.boot.app) || {};
+    return '<footer class="lp-foot"><div class="lp-foot-in"><div class="cp">© ' + (new Date()).getFullYear() + ' ' + esc(APP_NAME()) + '<span class="ver">v' + esc(app.version || '1.0.0') + '</span></div>'
+      + '<div class="dev">' + (d.LOGO ? '<img src="' + esc(d.LOGO) + '" referrerpolicy="no-referrer" onerror="this.style.display=\'none\'">' : '')
+      + '<div><small>พัฒนาโดย</small><br><a href="' + esc(d.URL || '#') + '" target="_blank" rel="noopener noreferrer">' + esc(d.NAME || '') + '</a></div></div></div></footer>';
+  }
+  function loadLanding() {
+    call('public.home', {}).then(function (data) {
+      if (!$('#lp-cats')) return;
+      Store.home = data;
+      animateCounters();
+      var cats = data.categories || [];
+      $('#lp-cats').innerHTML = cats.map(function (c) {
+        return '<div class="lp-cat" data-act="to-login"><div class="ic" style="' + gradStyle(c.color) + '"><i class="bi ' + esc(c.icon || 'bi-tag') + '"></i></div><b>' + esc(c.label) + '</b><small>' + fmtNum(c.count) + ' สื่อ</small></div>';
+      }).join('') || emptyHtml('bi-folder', 'ยังไม่มีหมวดหมู่', '');
+      $('#lp-featured').innerHTML = (data.featured || []).map(pubCard).join('') || emptyHtml('bi-collection', 'ยังไม่มีสื่อแนะนำ', 'เข้าสู่ระบบเพื่อเริ่มเพิ่มสื่อ');
+      $('#lp-recent').innerHTML = (data.recent || []).slice(0, 4).map(pubCard).join('') || emptyHtml('bi-clock-history', 'ยังไม่มีสื่อ', '');
+    }).catch(function (e) {
+      if ($('#lp-featured')) $('#lp-featured').innerHTML = emptyHtml('bi-wifi-off', 'โหลดข้อมูลไม่สำเร็จ', e.message);
+    });
+  }
+  function pubCard(r) {
+    return '<div class="res-card" data-act="to-login">' + resThumb(r)
+      + (r.featured ? '<span class="res-feat"><i class="bi bi-star-fill"></i> แนะนำ</span>' : '')
+      + '<span class="res-type-badge"><i class="bi ' + esc(r.type_icon) + '" style="color:' + esc(r.type_color) + '"></i> ' + esc(r.type_label) + '</span>'
+      + '<div class="res-body"><span class="res-cat" style="color:' + esc(r.category_color) + '"><i class="bi ' + esc(r.category_icon) + '"></i> ' + esc(r.category_label) + '</span>'
+      + '<div class="res-title">' + esc(r.title) + '</div>'
+      + '<div class="res-meta"><span><i class="bi bi-mortarboard"></i> ' + esc(r.level_label) + '</span><span>' + starsHtml(r.rating, r.rating_count) + '</span></div></div>'
+      + '<div class="res-foot">' + avatarHtml(r.uploader_name, '', 'av') + '<span>' + esc(r.uploader_name) + '</span><span style="margin-left:auto"><i class="bi bi-download"></i> ' + fmtNum(r.downloads) + '</span></div></div>';
+  }
+  function animateCounters() {
+    $$('[data-count]').forEach(function (e) {
+      var target = Number(e.getAttribute('data-count')) || 0, start = null, dur = 1100;
+      function step(ts) { if (!start) start = ts; var p = Math.min(1, (ts - start) / dur); e.textContent = fmtNum(Math.floor(target * (1 - Math.pow(1 - p, 3)))); if (p < 1) requestAnimationFrame(step); }
+      requestAnimationFrame(step);
+    });
+  }
+
+  /* ════════ LOGIN ════════ */
+  var LOGIN_MODE = 'login';
+  function renderLogin() {
+    stopClock();
+    var root = $('#app-root'); root.className = '';
+    var b = Store.boot || {}, s = b.settings || {};
+    var canReg = String(s.allow_self_register || 'no').toLowerCase() === 'yes';
+    var showDemo = String(s.show_demo_users || 'no').toLowerCase() === 'yes' && b.demo && b.demo.length;
+    var showManual = String(s.show_user_manual === undefined ? 'yes' : s.show_user_manual).toLowerCase() === 'yes';
+    var isReg = LOGIN_MODE === 'register' && canReg;
+    var feats = [
+      ['bi-cloud-arrow-up', 'อัปโหลดง่าย', 'แนบไฟล์หรือลิงก์ในไม่กี่คลิก'],
+      ['bi-search-heart', 'ค้นหาไว', 'กรองตามกลุ่มสาระ ระดับชั้น ประเภท'],
+      ['bi-shield-check', 'ปลอดภัย', 'ผ่านการตรวจสอบก่อนเผยแพร่'],
+      ['bi-graph-up-arrow', 'รายงานครบ', 'ติดตามสถิติการใช้งานได้ทุกมิติ']
+    ];
+    var st = b.public_stats || {};
+    root.innerHTML = '<div class="lf-stage"><div class="lf-win">'
+      + '<div class="lf-brand"><div class="lf-traffic traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>'
+      + '<div class="lf-logo"><i class="bi bi-collection-play-fill"></i></div>'
+      + '<h1>คลังสื่อการสอน<br>เพื่อครูทุกคน</h1><p>รวบรวม ค้นหา และแบ่งปันสื่อการเรียนการสอนคุณภาพ ในที่เดียว</p>'
+      + '<div class="lf-feats">' + feats.map(function (f) { return '<div class="lf-feat"><div class="fi"><i class="bi ' + f[0] + '"></i></div><div><b>' + f[1] + '</b><small>' + f[2] + '</small></div></div>'; }).join('') + '</div>'
+      + '<div class="lf-stats"><div class="lf-stat"><b>' + fmtNum(st.resources || 0) + '</b><small>สื่อการสอน</small></div><div class="lf-stat"><b>' + fmtNum(st.downloads || 0) + '</b><small>ดาวน์โหลด</small></div><div class="lf-stat"><b>' + fmtNum(st.teachers || 0) + '</b><small>ครูผู้ใช้</small></div></div>'
+      + '</div>'
+      + '<div class="lf-form-wrap">'
+      + '<a class="lf-back" data-act="to-landing"><i class="bi bi-arrow-left"></i> กลับหน้าหลัก</a>'
+      + '<div class="lf-mini"><div class="mi"><i class="bi bi-collection-play-fill"></i></div><div><b style="font-family:Kanit;font-size:16px">' + esc(APP_NAME()) + '</b></div></div>'
+      + '<h2 class="lf-h">' + (isReg ? 'สมัครสมาชิก' : 'ยินดีต้อนรับ') + '</h2><p class="lf-sub">' + (isReg ? 'สร้างบัญชีครูเพื่อเริ่มใช้งาน' : 'เข้าสู่ระบบเพื่อจัดการคลังสื่อของคุณ') + '</p>'
+      + '<form class="lf" id="lf-form" novalidate>'
+      + (isReg ? '<div class="lf-input-wrap"><i class="bi bi-person-badge"></i><input class="input" name="full_name" placeholder="ชื่อ-สกุล" autocomplete="name"></div>' : '')
+      + '<div class="lf-input-wrap"><i class="bi bi-person"></i><input class="input" name="username" placeholder="ชื่อผู้ใช้" autocomplete="username" spellcheck="false"></div>'
+      + '<div class="lf-input-wrap"><i class="bi bi-lock"></i><input class="input" name="password" type="password" placeholder="รหัสผ่าน" autocomplete="' + (isReg ? 'new-password' : 'current-password') + '"><button type="button" class="lf-toggle" data-act="pw-toggle"><i class="bi bi-eye"></i></button></div>'
+      + '<div class="lf-caps" id="lf-caps"><i class="bi bi-capslock"></i> Caps Lock เปิดอยู่</div>'
+      + (isReg ? '' : '<div class="lf-row"><label class="lf-check"><input type="checkbox" id="lf-remember"> จดจำชื่อผู้ใช้</label><span class="lf-link" data-act="forgot">ลืมรหัสผ่าน?</span></div>')
+      + '<button type="submit" class="lf-submit" id="lf-submit"><span class="st"><i class="bi ' + (isReg ? 'bi-person-plus' : 'bi-box-arrow-in-right') + '"></i> ' + (isReg ? 'สมัครสมาชิก' : 'เข้าสู่ระบบ') + '</span></button>'
+      + '</form>'
+      + (canReg ? '<div class="lf-switch">' + (isReg ? 'มีบัญชีอยู่แล้ว? <span class="lf-link" data-act="switch-login">เข้าสู่ระบบ</span>' : 'ยังไม่มีบัญชี? <span class="lf-link" data-act="switch-reg">สมัครสมาชิก</span>') + '</div>' : '')
+      + (showManual ? '<div style="text-align:center;margin-top:10px"><span class="lf-link" data-act="login-manual" style="font-size:12.5px;color:var(--muted2)"><i class="bi bi-book"></i> คู่มือการใช้ระบบ</span></div>' : '')
+      + (showDemo && !isReg ? demoHtml(b) : '')
+      + '</div></div>'
+      + footerLogin() + '</div>';
+    wireLogin(isReg);
+  }
+  function footerLogin() {
+    var d = (Store.boot && Store.boot.dev) || {}, app = (Store.boot && Store.boot.app) || {};
+    return '<div style="margin-top:18px;display:flex;align-items:center;gap:12px;color:var(--muted2);font-size:12px"><span>© ' + (new Date()).getFullYear() + ' ' + esc(APP_NAME()) + ' · v' + esc(app.version || '1.0.0') + '</span>'
+      + '<a href="' + esc(d.URL || '#') + '" target="_blank" rel="noopener noreferrer" style="margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--muted2)">' + (d.LOGO ? '<img src="' + esc(d.LOGO) + '" referrerpolicy="no-referrer" style="width:30px;height:30px;border-radius:50%;object-fit:cover" onerror="this.style.display=\'none\'">' : '') + 'พัฒนาโดย ' + esc(d.NAME || '') + '</a></div>';
+  }
+  function demoHtml(b) {
+    var pw = b.demo_password || '123456';
+    var cards = (b.demo || []).map(function (d) {
+      var ic = { admin: 'bi-shield-lock', academic: 'bi-mortarboard', teacher: 'bi-person-workspace' }[d.role] || 'bi-person';
+      var lbl = (Store.boot.roles && Store.boot.roles[d.role]) || d.role;
+      return '<div class="lf-demo-card" data-act="demo" data-role="' + esc(d.role) + '" data-demo="' + esc(d.username) + '"><div class="di"><i class="bi ' + ic + '"></i></div><b>' + esc(lbl) + '</b><small>' + esc(d.username) + '</small></div>';
+    }).join('');
+    return '<div class="lf-demo"><div class="lf-demo-head"><i class="bi bi-stars"></i> ทดลองใช้งานด้วยบัญชีตัวอย่าง<span class="pill">DEMO</span></div><div class="lf-demo-grid">' + cards + '</div><div style="text-align:center;font-size:11px;color:var(--muted);margin-top:9px"><i class="bi bi-cursor"></i> คลิกการ์ดเพื่อเข้าใช้ทันที (รหัสผ่าน: <b>' + esc(pw) + '</b>)</div></div>';
+  }
+  function wireLogin(isReg) {
+    var f = $('#lf-form'); if (!f) return;
+    var uname = f.querySelector('[name="username"]');
+    var rem = null; try { rem = localStorage.getItem('trl.user'); } catch (e) {}
+    if (rem && uname) { uname.value = rem; var ck = $('#lf-remember'); if (ck) ck.checked = true; var pwf = f.querySelector('[name="password"]'); if (pwf) setTimeout(function () { try { pwf.focus(); } catch (e) {} }, 80); }
+    else if (uname) setTimeout(function () { try { uname.focus(); } catch (e) {} }, 80);
+    var pw = f.querySelector('[name="password"]');
+    if (pw) pw.addEventListener('keyup', function (e) { var caps = e.getModifierState && e.getModifierState('CapsLock'); var c = $('#lf-caps'); if (c) c.style.display = caps ? 'flex' : 'none'; });
+    f.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var btn = $('#lf-submit');
+      var data = {};
+      $$('input', f).forEach(function (i) { if (i.name) data[i.name] = i.value; });
+      data.ua = navigator.userAgent;
+      if (!data.username || !data.password) { f.classList.add('shake'); setTimeout(function () { f.classList.remove('shake'); }, 460); toast('กรุณากรอกข้อมูลให้ครบ', 'warning'); return; }
+      var ck = $('#lf-remember');
+      try { if (ck && ck.checked) localStorage.setItem('trl.user', data.username); else localStorage.removeItem('trl.user'); } catch (e2) {}
+      runBtn(btn, { loading: 'กำลังตรวจสอบ…', success: 'สำเร็จ!', error: 'ไม่สำเร็จ' }, function () {
+        return call(isReg ? 'auth.register' : 'auth.login', data);
+      }).then(function (res) { afterLogin(res); }).catch(function () { f.classList.add('shake'); setTimeout(function () { f.classList.remove('shake'); }, 460); });
+    });
+  }
+  function afterLogin(res) {
+    Store.token = res.token; Store.user = res.user; Store.caps = res.caps || [];
+    try { localStorage.setItem('trl.token', res.token); localStorage.setItem('trl.session', JSON.stringify({ user: res.user, caps: res.caps })); } catch (e) {}
+    if (Store.boot) Store.boot.me = res.user;
+    closeLoginManual();
+    enterShell();
+  }
+  var DEMO_BUSY = false;
+  function doDemo(username, card) {
+    if (DEMO_BUSY) return;
+    DEMO_BUSY = true;
+    if (card) card.classList.add('loading');
+    Spinner.show('กำลังเข้าสู่ระบบ', { stages: ['กำลังยืนยันบัญชี…', 'กำลังเตรียมข้อมูล…', 'เกือบเสร็จแล้ว…'] });
+    call('auth.demo_login', { username: username, ua: navigator.userAgent })
+      .then(function (res) {
+        Spinner.hide(); DEMO_BUSY = false;
+        afterLogin(res);
+        toast('เข้าสู่ระบบในฐานะ ' + ((Store.boot.roles && Store.boot.roles[res.user.role]) || res.user.role), 'success');
+      })
+      .catch(function (e) { Spinner.hide(); DEMO_BUSY = false; if (card) card.classList.remove('loading'); toast(e.message, 'error', 4500); });
+  }
+
+  /* login manual overlay */
+  function openLoginManual() {
+    closeLoginManual();
+    var secs = [
+      ['overview', 'bi-info-circle', 'ภาพรวมระบบ', '<p>คลังสื่อการสอนออนไลน์สำหรับครู — รวบรวม ค้นหา ดาวน์โหลด และแบ่งปันสื่อการเรียนการสอน จัดหมวดตามกลุ่มสาระ ระดับชั้น และประเภทสื่อ</p>'],
+      ['login', 'bi-box-arrow-in-right', 'การเข้าสู่ระบบ', '<p>คลิก "เข้าสู่ระบบ" กรอกชื่อผู้ใช้/รหัสผ่าน หรือคลิกการ์ดบัญชีทดลอง</p><table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:13px"><tr style="background:var(--panel2)"><th style="padding:7px;text-align:left">บทบาท</th><th style="padding:7px;text-align:left">สิทธิ์</th></tr><tr><td style="padding:7px;border-top:1px solid var(--line)">ผู้ดูแลระบบ</td><td style="padding:7px;border-top:1px solid var(--line)">จัดการทุกอย่าง</td></tr><tr><td style="padding:7px;border-top:1px solid var(--line)">ครูวิชาการ</td><td style="padding:7px;border-top:1px solid var(--line)">อนุมัติสื่อ ดูรายงาน</td></tr><tr><td style="padding:7px;border-top:1px solid var(--line)">ครูผู้สอน</td><td style="padding:7px;border-top:1px solid var(--line)">อัปโหลด ดาวน์โหลด</td></tr></table>'],
+      ['upload', 'bi-cloud-upload', 'อัปโหลดสื่อ', '<p>เมนู "เพิ่มสื่อ" กรอกข้อมูลแบบ Wizard 4 ขั้นตอน: ข้อมูลพื้นฐาน → หมวดหมู่ → ไฟล์/ลิงก์ → ตรวจสอบ เลือกบันทึกร่างหรือส่งเผยแพร่</p>'],
+      ['search', 'bi-search', 'ค้นหา/ดาวน์โหลด', '<p>คลังสื่อมีตัวกรองตามกลุ่มสาระ ระดับชั้น ประเภท เรียงตามล่าสุด/นิยม/คะแนน คลิกการ์ดเพื่อดูรายละเอียดและดาวน์โหลด</p>'],
+      ['faq', 'bi-question-circle', 'คำถามที่พบบ่อย', '<details open style="border:1px solid var(--line);border-radius:10px;padding:9px 12px;margin-bottom:8px"><summary style="cursor:pointer;font-weight:600;font-family:Kanit">อัปโหลดไฟล์ใหญ่ได้แค่ไหน?</summary><p style="margin-top:6px;color:var(--muted2)">สูงสุด 25MB ต่อไฟล์ ไฟล์ใหญ่กว่านั้นใช้ลิงก์ภายนอก</p></details><details style="border:1px solid var(--line);border-radius:10px;padding:9px 12px"><summary style="cursor:pointer;font-weight:600;font-family:Kanit">ทำไมสื่อยังไม่แสดง?</summary><p style="margin-top:6px;color:var(--muted2)">ต้องผ่านการอนุมัติจากครูวิชาการก่อน</p></details>']
+    ];
+    var tabs = secs.map(function (s, i) { return '<a class="lm-tab' + (i === 0 ? ' on' : '') + '" data-lm="' + s[0] + '"><i class="bi ' + s[1] + '"></i> ' + s[2] + '</a>'; }).join('');
+    var content = secs.map(function (s, i) { return '<section class="lm-sec' + (i === 0 ? ' on' : '') + '" id="lm-' + s[0] + '"><h3 style="font-family:Kanit;margin:0 0 12px"><i class="bi ' + s[1] + '" style="color:var(--accent)"></i> ' + s[2] + '</h3><div style="font-size:14px;line-height:1.7;color:var(--ink2)">' + s[3] + '</div></section>'; }).join('');
+    var ov = el('div', '', '<div class="lm-card"><div class="lm-head"><div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div><div style="display:flex;align-items:center;gap:10px;flex:1"><div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;font-size:20px"><i class="bi bi-book-half"></i></div><div><b style="font-family:Kanit;font-size:16px;display:block">คู่มือการใช้ระบบ</b><small style="opacity:.85;font-size:12px">' + esc(APP_NAME()) + '</small></div></div><button class="md-close" id="lm-close" style="background:rgba(255,255,255,.2);border:0;color:#fff"><i class="bi bi-x-lg"></i></button></div><div class="lm-body"><div class="lm-nav">' + tabs + '</div><div class="lm-content">' + content + '</div></div></div>');
+    ov.id = 'lf-manual'; ov.className = 'lm-overlay';
+    document.body.appendChild(ov);
+    function setTab(id) { $$('.lm-tab', ov).forEach(function (a) { a.classList.toggle('on', a.getAttribute('data-lm') === id); }); $$('.lm-sec', ov).forEach(function (s) { s.classList.toggle('on', s.id === 'lm-' + id); }); }
+    ov.addEventListener('click', function (e) {
+      if (e.target === ov || (e.target.closest && e.target.closest('#lm-close'))) { closeLoginManual(); return; }
+      var t = e.target.closest && e.target.closest('.lm-tab'); if (t) setTab(t.getAttribute('data-lm'));
+    });
+    document.addEventListener('keydown', lmEsc);
+    requestAnimationFrame(function () { ov.classList.add('show'); });
+  }
+  function lmEsc(e) { if (e.key === 'Escape') closeLoginManual(); }
+  function closeLoginManual() { var ov = $('#lf-manual'); if (ov) ov.remove(); document.removeEventListener('keydown', lmEsc); }
+
+  /* ════════ SHELL ════════ */
+  function navConfig() {
+    return [
+      { cat: 'ภาพรวม', items: [{ hash: '#/dashboard', icon: 'bi-speedometer2', label: 'แดชบอร์ด', cap: '*' }] },
+      { cat: 'คลังสื่อ', items: [
+        { hash: '#/library', icon: 'bi-collection', label: 'คลังสื่อทั้งหมด', cap: 'resource.view_all' },
+        { hash: '#/upload', icon: 'bi-cloud-upload', label: 'เพิ่มสื่อ', cap: 'resource.create' },
+        { hash: '#/mine', icon: 'bi-folder-symlink', label: 'สื่อของฉัน', cap: 'resource.create' },
+        { hash: '#/favorites', icon: 'bi-heart', label: 'รายการโปรด', cap: 'favorite.manage' }
+      ] },
+      { cat: 'จัดการ', items: [
+        { hash: '#/approval', icon: 'bi-check2-square', label: 'รออนุมัติ', cap: 'resource.approve' },
+        { hash: '#/users', icon: 'bi-people', label: 'ผู้ใช้งาน', cap: 'user.view_all|user.manage' },
+        { hash: '#/master', icon: 'bi-diagram-3', label: 'ข้อมูลหลัก', cap: 'master.view|master.manage' }
+      ] },
+      { cat: 'รายงาน', items: [
+        { hash: '#/reports', icon: 'bi-bar-chart', label: 'รายงาน', cap: 'report.view_own' },
+        { hash: '#/audit', icon: 'bi-clock-history', label: 'บันทึกระบบ', cap: 'audit.view_all' }
+      ] },
+      { cat: 'ระบบ', items: [{ hash: '#/settings', icon: 'bi-gear', label: 'ตั้งค่าระบบ', cap: 'setting.manage' }] },
+      { cat: 'ส่วนตัว', items: [{ hash: '#/profile', icon: 'bi-person-circle', label: 'โปรไฟล์', cap: '*' }] }
+    ];
+  }
+  function enterShell() {
+    if (!Routes['#/dashboard']) { /* pages not loaded */ }
+    renderShell();
+    if (!location.hash || location.hash === '#' || location.hash === '#top') {
+      try { history.replaceState(null, '', location.pathname + location.search + '#/dashboard'); } catch (e) { location.hash = '#/dashboard'; }
+    }
+    dispatch();
+  }
+  function renderShell() {
+    var root = $('#app-root'); root.className = 'app';
+    var u = Store.user || {};
+    var sb = navConfig().map(function (g) {
+      var items = g.items.filter(function (it) { return hasCap(it.cap); });
+      if (!items.length) return '';
+      return '<div class="sb-cat">' + esc(g.cat) + '</div>' + items.map(function (it) {
+        return '<a class="sb-link" href="' + it.hash + '" data-nav><i class="bi ' + it.icon + '"></i> ' + esc(it.label) + '</a>';
+      }).join('');
+    }).join('');
+    root.innerHTML =
+      '<aside class="sidebar" id="sidebar">'
+      + '<div class="sb-top"><div class="sb-logo"><i class="bi bi-collection-play-fill"></i></div><div class="sb-brand"><b>' + esc(APP_NAME()) + '</b><small>คลังสื่อการสอน</small></div></div>'
+      + '<div class="sb-scroll">' + sb + '</div>'
+      + '<div class="sb-foot"><div class="sb-clock"><div class="t" id="sb-clock-t">--:--:--</div><div class="d" id="sb-clock-d"></div></div>'
+      + '<div class="sb-user" data-act="prof">' + avatarHtml(u.full_name, u.avatar) + '<div style="flex:1;min-width:0"><b style="font-family:Kanit;font-size:13px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(u.full_name) + '</b>' + roleChip(u.role, (Store.boot.roles && Store.boot.roles[u.role]) || u.role) + '</div><i class="bi bi-chevron-up" style="color:var(--muted)"></i></div></div>'
+      + '</aside>'
+      + '<div class="sb-backdrop" id="sb-backdrop" data-act="close-sb"></div>'
+      + '<div class="main">'
+      + '<div class="titlebar"><button class="burger" data-act="burger"><i class="bi bi-list"></i></button>'
+      + '<div class="win-title" id="win-title"><div class="ic"><i class="bi bi-speedometer2"></i></div><div><b>แดชบอร์ด</b><small>ภาพรวมระบบ</small></div></div>'
+      + '<div class="tb-search"><i class="bi bi-search"></i><input id="tb-search" placeholder="ค้นหาสื่อการสอน…"></div>'
+      + '<div class="tb-right"><div class="tb-pill"><span class="dot"></span> ออนไลน์</div>'
+      + '<div class="avatar" data-act="prof" style="cursor:pointer">' + (u.avatar ? '<img src="' + esc(u.avatar) + '" referrerpolicy="no-referrer">' : esc((u.full_name || '?').charAt(0))) + '</div></div></div>'
+      + '<div class="content"><div id="page"></div></div></div>'
+      + bottomNav() + profilePop()
+      + '<button class="fab" id="fab" data-fab hidden><i class="bi bi-plus-lg"></i></button>';
+    startClock();
+  }
+  function bottomNav() {
+    var items = [
+      { hash: '#/dashboard', icon: 'bi-speedometer2', label: 'หน้าแรก', cap: '*' },
+      { hash: '#/library', icon: 'bi-collection', label: 'คลัง', cap: 'resource.view_all' },
+      hasCap('resource.create') ? { hash: '#/upload', icon: 'bi-cloud-upload', label: 'เพิ่ม', cap: '*' } : { hash: '#/favorites', icon: 'bi-heart', label: 'โปรด', cap: '*' },
+      hasCap('resource.approve') ? { hash: '#/approval', icon: 'bi-check2-square', label: 'อนุมัติ', cap: '*' } : { hash: '#/mine', icon: 'bi-folder-symlink', label: 'ของฉัน', cap: 'resource.create' }
+    ].filter(function (it) { return hasCap(it.cap); });
+    return '<nav class="bottom-nav">' + items.map(function (it) { return '<a class="bn-item" href="' + it.hash + '" data-bn><i class="bi ' + it.icon + '"></i>' + esc(it.label) + '</a>'; }).join('')
+      + '<button class="bn-item" data-act="burger"><i class="bi bi-list"></i>เมนู</button></nav>';
+  }
+  function profilePop() {
+    var u = Store.user || {};
+    return '<div class="prof-pop" id="prof-pop"><div class="pp-head">' + avatarHtml(u.full_name, u.avatar) + '<div style="min-width:0"><b style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(u.full_name) + '</b><small>' + esc(u.email || u.username) + '</small></div></div>'
+      + '<div class="pp-body"><a class="pp-item" href="#/profile" data-nav><i class="bi bi-person"></i> โปรไฟล์ของฉัน</a>'
+      + '<div class="pp-item" data-act="change-pw"><i class="bi bi-key"></i> เปลี่ยนรหัสผ่าน</div>'
+      + '<div class="pp-div"></div><div class="pp-item danger" data-act="logout"><i class="bi bi-box-arrow-right"></i> ออกจากระบบ</div></div></div>';
+  }
+  function setActiveNav(hash) {
+    var base = hash.split('?')[0];
+    $$('.sb-link[data-nav]').forEach(function (a) { var h = a.getAttribute('href'); a.classList.toggle('active', h === base || base.indexOf(h + '/') === 0); });
+    $$('.bn-item[data-bn]').forEach(function (a) { a.classList.toggle('active', a.getAttribute('href') === base); });
+  }
+  var PAGE_META = {
+    '#/dashboard': ['bi-speedometer2', 'แดชบอร์ด', 'ภาพรวมระบบ'],
+    '#/library': ['bi-collection', 'คลังสื่อ', 'ค้นหาและดาวน์โหลดสื่อ'],
+    '#/upload': ['bi-cloud-upload', 'เพิ่มสื่อ', 'อัปโหลดสื่อการสอน'],
+    '#/mine': ['bi-folder-symlink', 'สื่อของฉัน', 'จัดการสื่อที่อัปโหลด'],
+    '#/favorites': ['bi-heart', 'รายการโปรด', 'สื่อที่บันทึกไว้'],
+    '#/approval': ['bi-check2-square', 'รออนุมัติ', 'ตรวจสอบและอนุมัติสื่อ'],
+    '#/users': ['bi-people', 'ผู้ใช้งาน', 'จัดการบัญชีผู้ใช้'],
+    '#/master': ['bi-diagram-3', 'ข้อมูลหลัก', 'กลุ่มสาระ ระดับชั้น ประเภท'],
+    '#/reports': ['bi-bar-chart', 'รายงาน', 'สถิติและรายงาน'],
+    '#/audit': ['bi-clock-history', 'บันทึกระบบ', 'ประวัติการใช้งาน'],
+    '#/settings': ['bi-gear', 'ตั้งค่าระบบ', 'กำหนดค่าระบบ'],
+    '#/profile': ['bi-person-circle', 'โปรไฟล์', 'ข้อมูลส่วนตัว']
+  };
+  function setTitle(hash) {
+    var base = hash.split('?')[0];
+    var m = PAGE_META[base] || ['bi-app', 'หน้า', ''];
+    var t = $('#win-title'); if (t) t.innerHTML = '<div class="ic"><i class="bi ' + m[0] + '"></i></div><div><b>' + esc(m[1]) + '</b><small>' + esc(m[2]) + '</small></div>';
+    var fab = $('#fab');
+    if (fab) { if (base === '#/library' || base === '#/dashboard' || base === '#/mine') { fab.hidden = !hasCap('resource.create'); } else fab.hidden = true; }
+  }
+
+  /* ── clock ── */
+  function startClock() { stopClock(); tick(); Store.clockTimer = setInterval(tick, 1000); }
+  function stopClock() { if (Store.clockTimer) { clearInterval(Store.clockTimer); Store.clockTimer = null; } }
+  function tick() {
+    var now = new Date(), t = $('#sb-clock-t'), d = $('#sb-clock-d');
+    if (t) t.textContent = TH.p2(now.getHours()) + ':' + TH.p2(now.getMinutes()) + ':' + TH.p2(now.getSeconds());
+    if (d) d.textContent = TH.WD[now.getDay()] + ' ' + now.getDate() + ' ' + TH.MS[now.getMonth()] + ' ' + (now.getFullYear() + 543);
+  }
+  function closeSidebar() { var s = $('#sidebar'), b = $('#sb-backdrop'); if (s) s.classList.remove('open'); if (b) b.classList.remove('show'); }
+
+  /* ── router ── */
+  function dispatch() {
+    if (!$('#page')) return;
+    if (!Store.token || !Store.user) return;
+    var hash = location.hash || '#/dashboard';
+    var handler = Routes[hash] || Routes[hash.split('?')[0]];
+    if (!handler) {
+      var parts = hash.split('?')[0].split('/');
+      while (parts.length > 1 && !handler) { parts.pop(); var p = parts.join('/'); if (p && p !== '#') handler = Routes[p]; else break; }
+    }
+    if (!handler) handler = Routes['#/dashboard'];
+    setActiveNav(hash); setTitle(hash); closeSidebar();
+    closeProfilePop();
+    var c = $('.content'); if (c) c.scrollTop = 0;
+    try { handler(hash); } catch (e) { var pg = $('#page'); if (pg) pg.innerHTML = emptyHtml('bi-exclamation-octagon', 'เกิดข้อผิดพลาด', e.message); if (window.console) console.error(e); }
+  }
+
+  /* ── profile pop ── */
+  function toggleProfilePop() { var p = $('#prof-pop'); if (p) p.classList.toggle('show'); }
+  function closeProfilePop() { var p = $('#prof-pop'); if (p) p.classList.remove('show'); }
+
+  /* ── logout ── */
+  function doLogout() {
+    confirmModal({ title: 'ออกจากระบบ', message: 'คุณต้องการออกจากระบบใช่หรือไม่?', okText: 'ออกจากระบบ', danger: true }).then(function (ok) {
+      if (!ok) return;
+      var tk = Store.token;
+      Store.token = null; Store.user = null; Store.caps = [];
+      try { localStorage.removeItem('trl.token'); localStorage.removeItem('trl.session'); } catch (e) {}
+      try { call('auth.logout', { token: tk }).catch(function () {}); } catch (e) {}
+      Modal.close(); Spinner.hide(); closeProfilePop(); stopClock();
+      try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+      if (Store.boot) Store.boot.me = null;
+      renderLanding();
+      toast('ออกจากระบบเรียบร้อย', 'success', 2000);
+    });
+  }
+
+  /* ── change password ── */
+  function changePwModal() {
+    closeProfilePop();
+    Modal.open({
+      title: 'เปลี่ยนรหัสผ่าน', titleIcon: 'bi-key',
+      html: '<div class="field"><label>รหัสผ่านเดิม</label><input class="input" type="password" id="cp-old"></div>'
+        + '<div class="field"><label>รหัสผ่านใหม่</label><input class="input" type="password" id="cp-new"><div class="field-hint">อย่างน้อย 6 ตัวอักษร</div></div>'
+        + '<div class="field"><label>ยืนยันรหัสผ่านใหม่</label><input class="input" type="password" id="cp-new2"></div>',
+      footer: '<button class="btn btn-ghost" data-modal-close>ยกเลิก</button><button class="btn btn-primary" id="cp-save"><i class="bi bi-check-lg"></i> บันทึก</button>',
+      onOpen: function (host) {
+        $('#cp-save', host).addEventListener('click', function () {
+          var o = $('#cp-old').value, n = $('#cp-new').value, n2 = $('#cp-new2').value;
+          if (n !== n2) { toast('รหัสผ่านใหม่ไม่ตรงกัน', 'warning'); return; }
+          if (n.length < 6) { toast('รหัสผ่านสั้นเกินไป', 'warning'); return; }
+          runBtn($('#cp-save'), { loading: 'กำลังบันทึก…', ok: 'เปลี่ยนรหัสผ่านสำเร็จ' }, function () {
+            return call('auth.change_password', { old_password: o, new_password: n });
+          }).then(function () { Modal.close(); }).catch(function () {});
+        });
+      }
+    });
+  }
+
+  /* ── built-in actions ── */
+  ACTIONS['to-login'] = function () { renderLogin(); };
+  ACTIONS['to-landing'] = function () { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} renderLanding(); };
+  ACTIONS['login-manual'] = function () { openLoginManual(); };
+  ACTIONS['switch-reg'] = function () { LOGIN_MODE = 'register'; renderLogin(); };
+  ACTIONS['switch-login'] = function () { LOGIN_MODE = 'login'; renderLogin(); };
+  ACTIONS['forgot'] = function () { toast('กรุณาติดต่อผู้ดูแลระบบเพื่อรีเซ็ตรหัสผ่าน', 'info', 4000); };
+  ACTIONS['pw-toggle'] = function (el2) { var inp = el2.parentNode.querySelector('input'); if (!inp) return; var show = inp.type === 'password'; inp.type = show ? 'text' : 'password'; el2.querySelector('i').className = show ? 'bi bi-eye-slash' : 'bi bi-eye'; };
+  ACTIONS['demo'] = function (el2) { var c = el2.closest ? el2.closest('.lf-demo-card') : el2; doDemo((c || el2).getAttribute('data-demo'), c || el2); };
+  ACTIONS['scroll'] = function (el2) { var t = $('#' + el2.getAttribute('data-target')); if (t) t.scrollIntoView({ behavior: 'smooth' }); };
+  ACTIONS['burger'] = function () { var s = $('#sidebar'), b = $('#sb-backdrop'); if (s) { var open = s.classList.toggle('open'); if (b) b.classList.toggle('show', open); } };
+  ACTIONS['close-sb'] = function () { closeSidebar(); };
+  ACTIONS['prof'] = function () { toggleProfilePop(); };
+  ACTIONS['logout'] = function () { doLogout(); };
+  ACTIONS['change-pw'] = function () { changePwModal(); };
+  ACTIONS['modal-close'] = function () { Modal.close(); };
+
+  /* ── wireGlobal (document delegation, capture) ── */
+  function wireGlobal() {
+    if (window.__trlWired) return; window.__trlWired = true;
+    document.addEventListener('click', function (e) {
+      var act = e.target.closest && e.target.closest('[data-act]');
+      if (act) { var fn = ACTIONS[act.getAttribute('data-act')]; if (fn) { e.preventDefault(); fn(act, e); return; } }
+      if (e.target.closest && e.target.closest('[data-modal-close]')) { e.preventDefault(); Modal.close(); return; }
+      var a = e.target.closest && e.target.closest('a[href]');
+      if (a) { var href = a.getAttribute('href'); if (href && href.charAt(0) === '#') { if (href === '#' || href === '#top') return; if (a.target && a.target !== '_top' && a.target !== '_self') return; e.preventDefault(); if (href === location.hash) dispatch(); else location.hash = href; return; } }
+      var hh = e.target.closest && e.target.closest('[data-hash]');
+      if (hh && hh.tagName !== 'A') { e.preventDefault(); var nh = hh.getAttribute('data-hash'); if (nh && nh !== '#top') { if (nh === location.hash) dispatch(); else location.hash = nh; } return; }
+      var fab = e.target.closest && e.target.closest('[data-fab]'); if (fab) { e.preventDefault(); location.hash = '#/upload'; return; }
+      // outside profile pop
+      if (!(e.target.closest && (e.target.closest('#prof-pop') || e.target.closest('[data-act="prof"]')))) closeProfilePop();
+    }, true);
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closeProfilePop(); var mh = $('#modal-host'); if (mh && mh.classList.contains('is-open')) Modal.close(); } });
+    window.addEventListener('hashchange', dispatch);
+    window.addEventListener('resize', function () { if (window.innerWidth > 920) closeSidebar(); });
+  }
+
+  /* ── boot ── */
+  function readInlineBoot() { try { var elx = document.getElementById('boot-data'); if (elx) return JSON.parse(elx.textContent || '{}'); } catch (e) {} return null; }
+  function setBootText(t) { var e = document.getElementById('boot-text'); if (e) e.textContent = t; }
+  function hideBoot() { var b = document.getElementById('boot-loader'); if (b) b.remove(); }
+  function showFatal(msg, detail) {
+    hideBoot();
+    var root = $('#app-root'); if (!root) return;
+    root.className = '';
+    root.innerHTML = '<div class="fatal"><div class="fatal-card"><div class="ic"><i class="bi bi-exclamation-triangle-fill"></i></div><h2 style="font-family:Kanit;margin:0 0 8px">เกิดข้อผิดพลาด</h2><p style="color:var(--muted2);margin:0 0 16px">' + esc(msg) + '</p>' + (detail ? '<details style="text-align:left;background:var(--panel2);border-radius:10px;padding:10px;margin-bottom:14px;font-size:11px"><summary style="cursor:pointer">รายละเอียด</summary><pre style="white-space:pre-wrap;font-size:10px;margin-top:8px">' + esc(detail) + '</pre></details>' : '') + '<button class="btn btn-primary" onclick="location.reload()"><i class="bi bi-arrow-clockwise"></i> ลองใหม่</button></div></div>';
+  }
+
+  function boot() {
+    var inline = readInlineBoot();
+    setBootText('กำลังโหลดข้อมูลเริ่มต้น…');
+    if (inline && inline.app) {
+      Store.boot = inline; applyTheme();
+      var tk = null; try { tk = localStorage.getItem('trl.token'); } catch (e) {}
+      if (!tk) { hideBoot(); renderLanding(); return; }
+      // optimistic cached session
+      var cached = null; try { cached = JSON.parse(localStorage.getItem('trl.session') || 'null'); } catch (e) {}
+      Store.token = tk;
+      if (cached && cached.user) {
+        Store.user = cached.user; Store.caps = cached.caps || []; if (Store.boot) Store.boot.me = cached.user;
+        hideBoot(); enterShell(); verifyBg(); return;
+      }
+      verifyToken(0); return;
+    }
+    // fallback: full round-trip
+    call('app.bootstrap', {}).then(function (data) {
+      try {
+        Store.boot = data; applyTheme();
+        var tk2 = null; try { tk2 = localStorage.getItem('trl.token'); } catch (e) {}
+        hideBoot();
+        if (data.me && tk2) { Store.token = tk2; Store.user = data.me; Store.caps = data.caps || []; enterShell(); }
+        else renderLanding();
+      } catch (re) { showFatal('แสดงผลล้มเหลว: ' + re.message, re.stack); }
+    }).catch(function (e) { showFatal(e.message, e.stack); });
+  }
+  function verifyToken(n) {
+    call('app.bootstrap', {}, 25000).then(function (data) {
+      try {
+        Store.boot = data; applyTheme(); hideBoot();
+        if (data.me) { Store.user = data.me; Store.caps = data.caps || []; try { localStorage.setItem('trl.session', JSON.stringify({ user: data.me, caps: data.caps })); } catch (e) {} enterShell(); }
+        else { clearSession(); renderLanding(); }
+      } catch (re) { showFatal('แสดงผลล้มเหลว: ' + re.message, re.stack); }
+    }).catch(function (e) {
+      if (n < 1) { setTimeout(function () { verifyToken(n + 1); }, 900); return; }
+      hideBoot(); clearSession(); renderLanding(); toast('การเชื่อมต่อไม่เสถียร กรุณาเข้าสู่ระบบอีกครั้ง', 'warning', 4000);
+    });
+  }
+  function verifyBg() {
+    call('app.bootstrap', {}, 25000).then(function (data) {
+      if (!data.me) { clearSession(); /* keep shell? token invalid → go landing */ if ($('#sidebar')) { stopClock(); renderLanding(); toast('เซสชันหมดอายุ', 'warning'); } return; }
+      Store.boot = data; Store.user = data.me; Store.caps = data.caps || []; applyTheme();
+      try { localStorage.setItem('trl.session', JSON.stringify({ user: data.me, caps: data.caps })); } catch (e) {}
+    }).catch(function () {});
+  }
+  function clearSession() { Store.token = null; Store.user = null; Store.caps = []; try { localStorage.removeItem('trl.token'); localStorage.removeItem('trl.session'); } catch (e) {} }
+
+  function start() { wireGlobal(); boot(); }
+
+  /* ── public surface (cross-IIFE) ── */
+  window.TRL = {
+    Store: Store, Routes: Routes, ACTIONS: ACTIONS,
+    $: $, $$: $$, esc: esc, el: el, call: call, hasCap: hasCap, toast: toast,
+    Spinner: Spinner, Modal: Modal, confirmModal: confirmModal, runBtn: runBtn, submitState: submitState,
+    fmtNum: fmtNum, fmtBytes: fmtBytes, TH: TH, applyTheme: applyTheme,
+    avatarHtml: avatarHtml, roleChip: roleChip, statusBadge: statusBadge, starsHtml: starsHtml,
+    gradStyle: gradStyle, shade: shade, barRows: barRows, svgDonut: svgDonut, svgLine: svgLine,
+    resThumb: resThumb, emptyHtml: emptyHtml, skCards: skCards, animateCounters: animateCounters,
+    dispatch: dispatch, boot: boot, start: start, wireGlobal: wireGlobal,
+    renderLanding: renderLanding, renderLogin: renderLogin, renderShell: renderShell,
+    enterShell: enterShell, doLogout: doLogout, setTitle: setTitle, closeSidebar: closeSidebar,
+    APP_NAME: APP_NAME
+  };
+})();
+</script>

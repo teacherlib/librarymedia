@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="ระบบคลังสื่อการสอนสำหรับโรงเรียน — รวบรวม ค้นหา และแบ่งปันสื่อการเรียนการสอน">
+  <title>TRL · คลังสื่อการสอนสำหรับโรงเรียน</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700;800&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <?!= include('Styles'); ?>
+  <?!= include('Styles2'); ?>
+</head>
+<body>
+  <div id="boot-loader" class="boot">
+    <div class="boot-card">
+      <div class="boot-ring"><i class="bi bi-collection-play-fill"></i></div>
+      <div class="boot-title">คลังสื่อการสอน</div>
+      <div class="boot-sub" id="boot-text">กำลังเริ่มต้นระบบ…</div>
+      <div class="boot-dots"><span></span><span></span><span></span></div>
+    </div>
+  </div>
+
+  <div id="app-root"></div>
+  <div id="modal-host"></div>
+  <div id="spin-host" hidden></div>
+  <div id="toast-host"></div>
+
+  <script id="boot-data" type="application/json"><?!= JSON.stringify(bootData).replace(/<\/script/gi, '<\\/script').replace(/<!--/g, '<\\!--') ?></script>
+
+  <?!= include('ScriptsCore'); ?>
+  <?!= include('ScriptsPages'); ?>
+  <?!= include('Scripts'); ?>
+</body>
+</html>

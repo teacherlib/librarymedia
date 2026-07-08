@@ -1,0 +1,94 @@
+/**
+ * ═══════════════════════════════════════════════════════════════
+ *  TRL · ระบบคลังสื่อการสอนสำหรับโรงเรียน
+ *  File:        06_Settings.gs — Settings (EAV) · public/sensitive filtering
+ *  Version:     1.0.0
+ *  Last Update: 2026-06-19
+ *  Developer:   ครูวิรัตน์ หาดคำ · www.kruwirat.com
+ *  License:     Proprietary · © 2026
+ * ═══════════════════════════════════════════════════════════════
+ */
+
+function Settings_forceTextValueColumn_(sh) {
+  try { sh.getRange(2, 2, Math.max(1, sh.getMaxRows() - 1), 1).setNumberFormat('@'); } catch (e) {}
+}
+
+function Settings_map_() {
+  var rows = DB_readAll(SHEETS.SETTINGS);
+  var map = {};
+  rows.forEach(function (r) { map[r.key] = (r.value == null ? '' : String(r.value)); });
+  // merge defaults สำหรับ key ที่ยังไม่มี
+  Object.keys(SETTINGS_DEFAULTS).forEach(function (k) { if (!(k in map)) map[k] = SETTINGS_DEFAULTS[k]; });
+  return map;
+}
+
+function Settings_setRaw_(key, value) {
+  if (!key) throw new Error('ไม่ระบุ key');
+  var sh = DB_ensureSchema_(SHEETS.SETTINGS);
+  Settings_forceTextValueColumn_(sh);
+  var existing = DB_findOne(SHEETS.SETTINGS, function (x) { return x.key === key; });
+  if (existing) { DB_update(SHEETS.SETTINGS, existing.key, { value: String(value == null ? '' : value) }); return; }
+  // insert ใหม่ (key เป็น primary)
+  var last = sh.getLastRow() + 1;
+  var range = sh.getRange(last, 1, 1, 3);
+  range.setNumberFormat('@');
+  range.setValues([[key, String(value == null ? '' : value), cfg_now_()]]);
+  _flush_(); _bumpVer_('sheet:' + SHEETS.SETTINGS);
+}
+
+/* update โดยใช้ key เป็น primary — ต้อง override DB_update lookup */
+function Settings_ensureDefaults_() {
+  var sh = DB_ensureSchema_(SHEETS.SETTINGS);
+  Settings_forceTextValueColumn_(sh);
+  var map = {};
+  DB_readAll(SHEETS.SETTINGS).forEach(function (r) { map[r.key] = 1; });
+  var toAdd = [];
+  Object.keys(SETTINGS_DEFAULTS).forEach(function (k) { if (!map[k]) toAdd.push({ key: k, value: SETTINGS_DEFAULTS[k] }); });
+  if (toAdd.length) {
+    var start = sh.getLastRow() + 1, now = cfg_now_();
+    var matrix = toAdd.map(function (x) { return [x.key, String(x.value), now]; });
+    sh.getRange(start, 1, matrix.length, 3).setNumberFormat('@');
+    sh.getRange(start, 1, matrix.length, 3).setValues(matrix);
+    _flush_(); _bumpVer_('sheet:' + SHEETS.SETTINGS);
+  }
+}
+
+function Settings_getPublic_() {
+  Settings_ensureDefaults_();
+  var map = Settings_map_();
+  var out = {};
+  Object.keys(map).forEach(function (k) { if (SETTINGS_SENSITIVE.indexOf(k) < 0) out[k] = map[k]; });
+  return out;
+}
+
+/* api: get (admin full, others filtered) */
+function Settings_get(user, p) {
+  Auth_requireCap(user, 'setting.read|setting.manage');
+  Settings_ensureDefaults_();
+  var map = Settings_map_();
+  if (hasCap_(user.role, 'setting.manage')) return { settings: map };
+  var out = {};
+  Object.keys(map).forEach(function (k) { if (SETTINGS_SENSITIVE.indexOf(k) < 0) out[k] = map[k]; });
+  return { settings: out };
+}
+
+/* api: update (admin only) */
+function Settings_update(user, p) {
+  Auth_requireCap(user, 'setting.manage');
+  var patch = (p && p.settings) || {};
+  var keys = Object.keys(patch).filter(function (k) { return k in SETTINGS_DEFAULTS; });
+  keys.forEach(function (k) { Settings_setRaw_(k, patch[k]); });
+  Audit_log_(user, 'setting.update', 'setting', '', { keys: keys });
+  return { ok: true };
+}
+
+function Settings_repair() {
+  var sh = DB_ensureSchema_(SHEETS.SETTINGS), last = sh.getLastRow();
+  Settings_forceTextValueColumn_(sh);
+  if (last >= 2) {
+    var range = sh.getRange(2, 1, last - 1, 3), vals = range.getValues();
+    range.setValues(vals.map(function (r) { return [String(r[0] || ''), r[1] === '' || r[1] == null ? '' : String(r[1]), r[2]]; }));
+  }
+  _bumpVer_('sheet:' + SHEETS.SETTINGS);
+  return { fixed: Math.max(0, last - 1) };
+}

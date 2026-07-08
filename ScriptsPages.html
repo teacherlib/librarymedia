@@ -1,0 +1,695 @@
+<script id="trl-pages" type="text/x-trl">
+/* ═══════════════════════════════════════════════════════════════
+   TRL · ScriptsPages.html — dashboard · library · upload · approval · reports · users · master · settings · profile
+   (inert block — injected by Scripts.html bootstrap)
+   ═══════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+  var T = window.TRL;
+  var $ = T.$, $$ = T.$$, esc = T.esc, el = T.el, call = T.call, toast = T.toast, Modal = T.Modal, Spinner = T.Spinner, confirmModal = T.confirmModal, runBtn = T.runBtn;
+  var Store = T.Store, hasCap = T.hasCap, fmtNum = T.fmtNum, fmtBytes = T.fmtBytes, TH = T.TH;
+  var avatarHtml = T.avatarHtml, roleChip = T.roleChip, statusBadge = T.statusBadge, starsHtml = T.starsHtml, gradStyle = T.gradStyle;
+  var barRows = T.barRows, svgDonut = T.svgDonut, svgLine = T.svgLine, resThumb = T.resThumb, emptyHtml = T.emptyHtml, skCards = T.skCards, animateCounters = T.animateCounters;
+  var R = T.Routes, A = T.ACTIONS;
+
+  function page(html) { var p = $('#page'); if (p) p.innerHTML = html; }
+  function alive() { return !!$('#page'); }
+  function bootCats() { return (Store.boot && Store.boot.categories) || []; }
+  function bootLevels() { return (Store.boot && Store.boot.levels) || []; }
+  function bootTypes() { return (Store.boot && Store.boot.restypes) || []; }
+  function lvlLabel(k) { var f = bootLevels().filter(function (l) { return l.key === k; })[0]; return f ? f.label : k; }
+  function statusLabel(s) { return (Store.boot && Store.boot.statuses && Store.boot.statuses[s]) || s; }
+  function greet() { var h = new Date().getHours(); return h < 12 ? 'อรุณสวัสดิ์' : h < 17 ? 'สวัสดีตอนบ่าย' : 'สวัสดีตอนเย็น'; }
+  function refreshBoot() { call('app.bootstrap', {}).then(function (d) { if (!d) return; if (d.categories) Store.boot.categories = d.categories; if (d.levels) Store.boot.levels = d.levels; if (d.restypes) Store.boot.restypes = d.restypes; if (d.settings) Store.boot.settings = d.settings; }).catch(function () {}); }
+
+  /* ════════ SHARED: resource card ════════ */
+  function resCard(r) {
+    return '<div class="res-card" data-act="res-open" data-id="' + esc(r.id) + '">' + resThumb(r)
+      + (r.featured ? '<span class="res-feat"><i class="bi bi-star-fill"></i> แนะนำ</span>' : '')
+      + '<button class="res-fav' + (r.is_favorite ? ' on' : '') + '" data-act="res-fav" data-id="' + esc(r.id) + '"><i class="bi ' + (r.is_favorite ? 'bi-heart-fill' : 'bi-heart') + '"></i></button>'
+      + '<span class="res-type-badge"><i class="bi ' + esc(r.type_icon) + '" style="color:' + esc(r.type_color) + '"></i> ' + esc(r.type_label) + '</span>'
+      + '<div class="res-body"><span class="res-cat" style="color:' + esc(r.category_color) + '"><i class="bi ' + esc(r.category_icon) + '"></i> ' + esc(r.category_label) + '</span>'
+      + '<div class="res-title">' + esc(r.title) + '</div>'
+      + '<div class="res-meta"><span><i class="bi bi-mortarboard"></i> ' + esc(r.level_label) + '</span><span>' + starsHtml(r.rating, r.rating_count) + '</span></div>'
+      + (r.status !== 'approved' ? '<div style="margin-top:7px">' + statusBadge(r.status, statusLabel(r.status)) + '</div>' : '')
+      + '</div>'
+      + '<div class="res-foot">' + avatarHtml(r.uploader_name, r.uploader_avatar, 'av') + '<span>' + esc(r.uploader_name) + '</span><span style="margin-left:auto"><i class="bi bi-download"></i> ' + fmtNum(r.downloads) + '</span></div></div>';
+  }
+  function resRow(r) {
+    return '<div class="res-row" data-act="res-open" data-id="' + esc(r.id) + '"><div class="rt" style="' + gradStyle(r.type_color) + '"><i class="bi ' + esc(r.type_icon) + '"></i></div>'
+      + '<div class="rb"><b>' + esc(r.title) + '</b><div class="res-meta"><span style="color:' + esc(r.category_color) + '"><i class="bi ' + esc(r.category_icon) + '"></i> ' + esc(r.category_label) + '</span><span><i class="bi bi-mortarboard"></i> ' + esc(r.level_label) + '</span><span>' + starsHtml(r.rating, r.rating_count) + '</span>' + (r.status !== 'approved' ? '<span>' + statusBadge(r.status, statusLabel(r.status)) + '</span>' : '') + '</div></div>'
+      + '<div style="text-align:right;flex-shrink:0"><div style="font-family:Kanit;font-weight:800;color:var(--accent)">' + fmtNum(r.downloads) + '</div><small style="color:var(--muted)">ดาวน์โหลด</small></div></div>';
+  }
+
+  /* ════════ SHARED: resource detail modal ════════ */
+  function openRes(id) {
+    Modal.open({ title: 'รายละเอียดสื่อ', size: 'lg', html: '<div style="padding:30px;text-align:center"><div class="spin-inline" style="border-color:rgba(10,132,255,.3);border-top-color:var(--accent);width:30px;height:30px"></div></div>' });
+    call('resource.get', { id: id }).then(function (r) {
+      if (!$('#modal-host').classList.contains('is-open')) return;
+      renderResModal(r);
+    }).catch(function (e) { Modal.close(); toast(e.message, 'error', 4500); });
+  }
+  function renderResModal(r) {
+    var canDl = hasCap('resource.download');
+    var actions = '';
+    if (r.can_approve && r.status === 'pending') actions += '<button class="btn btn-success btn-sm" data-act="rd-approve" data-id="' + esc(r.id) + '"><i class="bi bi-check-lg"></i> เผยแพร่</button><button class="btn btn-danger btn-sm" data-act="rd-reject" data-id="' + esc(r.id) + '"><i class="bi bi-arrow-counterclockwise"></i> ตีกลับ</button>';
+    if (r.can_feature && r.status === 'approved') actions += '<button class="btn btn-soft btn-sm" data-act="rd-feature" data-id="' + esc(r.id) + '"><i class="bi bi-star' + (r.featured ? '-fill' : '') + '"></i> ' + (r.featured ? 'เลิกแนะนำ' : 'ตั้งแนะนำ') + '</button>';
+    if (r.can_edit) actions += '<button class="btn btn-ghost btn-sm" data-act="rd-edit" data-id="' + esc(r.id) + '"><i class="bi bi-pencil"></i> แก้ไข</button>';
+    if (r.can_delete) actions += '<button class="btn btn-ghost btn-sm" style="color:var(--danger)" data-act="rd-delete" data-id="' + esc(r.id) + '"><i class="bi bi-trash"></i> ลบ</button>';
+
+    var reviews = (r.reviews || []).map(function (rv) {
+      return '<div class="review-item">' + avatarHtml(rv.name, rv.avatar) + '<div style="flex:1"><b style="font-family:Kanit;font-size:13px">' + esc(rv.name) + '</b> ' + starsHtml(rv.score) + '<div style="font-size:13px;color:var(--ink2);margin-top:2px">' + esc(rv.comment) + '</div><small style="color:var(--muted)">' + TH.smart(rv.created_at) + '</small></div></div>';
+    }).join('');
+
+    var html = '<div class="rd-hero" style="' + gradStyle(r.category_color) + '">'
+      + '<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px"><span class="badge" style="background:rgba(255,255,255,.2);color:#fff"><i class="bi ' + esc(r.type_icon) + '"></i> ' + esc(r.type_label) + '</span>' + (r.featured ? '<span class="badge" style="background:rgba(255,255,255,.25);color:#fff"><i class="bi bi-star-fill"></i> แนะนำ</span>' : '') + '<span class="badge" style="background:rgba(255,255,255,.2);color:#fff">' + esc(r.code) + '</span></div>'
+      + '<h2 style="font-family:Kanit;font-weight:800;font-size:21px;margin:0 0 6px;position:relative;z-index:1">' + esc(r.title) + '</h2>'
+      + '<div style="font-size:13px;opacity:.92;position:relative;z-index:1"><i class="bi ' + esc(r.category_icon) + '"></i> ' + esc(r.category_label) + ' · <i class="bi bi-mortarboard"></i> ' + esc(r.level_label) + '</div></div>'
+      + '<div class="rd-stats"><div class="rd-stat"><b>' + fmtNum(r.downloads) + '</b><small>ดาวน์โหลด</small></div><div class="rd-stat"><b>' + fmtNum(r.views) + '</b><small>เข้าชม</small></div><div class="rd-stat"><b>' + (r.rating || '-') + '</b><small>คะแนน (' + r.rating_count + ')</small></div></div>'
+      + (r.status !== 'approved' ? '<div style="margin-bottom:14px">' + statusBadge(r.status, statusLabel(r.status)) + (r.reject_reason ? ' <span style="font-size:12.5px;color:var(--danger)">เหตุผล: ' + esc(r.reject_reason) + '</span>' : '') + '</div>' : '')
+      + (r.description ? '<div class="rd-sec"><h4><i class="bi bi-card-text"></i> รายละเอียด</h4><div style="font-size:13.5px;line-height:1.7;color:var(--ink2);white-space:pre-wrap">' + esc(r.description) + '</div></div>' : '')
+      + (r.tags ? '<div class="rd-sec"><div style="display:flex;gap:6px;flex-wrap:wrap">' + r.tags.split(',').filter(Boolean).map(function (t2) { return '<span class="chip" style="cursor:default"><i class="bi bi-tag"></i> ' + esc(t2.trim()) + '</span>'; }).join('') + '</div></div>' : '')
+      + '<div class="rd-sec"><h4><i class="bi bi-person"></i> ผู้เผยแพร่</h4><div style="display:flex;align-items:center;gap:10px">' + avatarHtml(r.uploader_name, r.uploader_avatar) + '<div><b style="font-family:Kanit">' + esc(r.uploader_name) + '</b><div style="font-size:12px;color:var(--muted)">เผยแพร่เมื่อ ' + TH.date(r.created_at) + '</div></div></div></div>'
+      + '<div class="rd-sec"><h4><i class="bi bi-star"></i> ให้คะแนนสื่อนี้</h4><div class="rate-stars" id="rate-stars">' + [1, 2, 3, 4, 5].map(function (i) { return '<i class="bi bi-star' + (i <= (r.my_rating || 0) ? '-fill on' : '') + '" data-s="' + i + '"></i>'; }).join('') + '</div>'
+      + '<textarea class="textarea" id="rate-comment" placeholder="เขียนความคิดเห็น (ไม่บังคับ)" style="margin-top:10px;min-height:60px">' + esc(r.my_comment || '') + '</textarea><button class="btn btn-soft btn-sm" id="rate-save" style="margin-top:8px"><i class="bi bi-send"></i> บันทึกคะแนน</button></div>'
+      + (reviews ? '<div class="rd-sec"><h4><i class="bi bi-chat-quote"></i> ความคิดเห็น (' + (r.reviews || []).length + ')</h4>' + reviews + '</div>' : '');
+
+    var footer = '<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-start;width:100%">' + actions + '<div style="margin-left:auto;display:flex;gap:8px">'
+      + (canDl ? '<button class="btn btn-primary" data-act="rd-download" data-id="' + esc(r.id) + '"><i class="bi bi-download"></i> ดาวน์โหลด</button>' : '')
+      + '</div></div>';
+    Modal.open({
+      title: 'รายละเอียดสื่อ', size: 'lg', html: html, footer: footer,
+      onOpen: function (host) {
+        // rating stars
+        var cur = r.my_rating || 0;
+        $$('#rate-stars i', host).forEach(function (st) {
+          st.addEventListener('mouseenter', function () { var s = +st.getAttribute('data-s'); $$('#rate-stars i', host).forEach(function (x) { x.classList.toggle('hover', +x.getAttribute('data-s') <= s); }); });
+          st.addEventListener('mouseleave', function () { $$('#rate-stars i', host).forEach(function (x) { x.classList.remove('hover'); }); });
+          st.addEventListener('click', function () { cur = +st.getAttribute('data-s'); $$('#rate-stars i', host).forEach(function (x) { var on = +x.getAttribute('data-s') <= cur; x.className = 'bi bi-star' + (on ? '-fill on' : ''); x.setAttribute('data-s', x.getAttribute('data-s')); }); });
+        });
+        $('#rate-save', host).addEventListener('click', function () {
+          if (!cur) { toast('กรุณาเลือกดาว', 'warning'); return; }
+          runBtn($('#rate-save', host), { loading: 'กำลังบันทึก…', ok: 'ขอบคุณสำหรับคะแนน' }, function () { return call('rating.save', { id: r.id, score: cur, comment: $('#rate-comment', host).value }); }).then(function () {}).catch(function () {});
+        });
+      }
+    });
+  }
+
+  A['res-open'] = function (e) { openRes(e.getAttribute('data-id')); };
+  A['res-fav'] = function (e, ev) {
+    var id = e.getAttribute('data-id');
+    call('favorite.toggle', { id: id }).then(function (res) {
+      var i = e.querySelector('i'); e.classList.toggle('on', res.favorite); i.className = 'bi ' + (res.favorite ? 'bi-heart-fill' : 'bi-heart');
+      toast(res.favorite ? 'บันทึกในรายการโปรด' : 'นำออกจากรายการโปรด', 'success', 1600);
+    }).catch(function (er) { toast(er.message, 'error'); });
+  };
+  A['rd-download'] = function (e) {
+    var id = e.getAttribute('data-id');
+    runBtn(e, { loading: 'กำลังเตรียมไฟล์…' }, function () { return call('resource.download', { id: id }); }).then(function (res) {
+      if (res.url) window.open(res.url, '_blank'); else toast('ไม่พบไฟล์ดาวน์โหลด', 'warning');
+      var st = $('.rd-stat b'); if (st) st.textContent = fmtNum(res.downloads);
+    }).catch(function () {});
+  };
+  A['rd-approve'] = function (e) { var id = e.getAttribute('data-id'); runBtn(e, { loading: 'กำลังเผยแพร่…', ok: 'เผยแพร่สื่อแล้ว' }, function () { return call('resource.approve', { id: id }); }).then(function () { Modal.close(); refreshCurrent(); }).catch(function () {}); };
+  A['rd-reject'] = function (e) {
+    var id = e.getAttribute('data-id');
+    Modal.open({ title: 'ตีกลับสื่อ', titleIcon: 'bi-arrow-counterclockwise', html: '<div class="field"><label>เหตุผลการตีกลับ <span class="req">*</span></label><textarea class="textarea" id="rj-reason" placeholder="ระบุสิ่งที่ต้องแก้ไข…"></textarea></div>', footer: '<button class="btn btn-ghost" data-modal-close>ยกเลิก</button><button class="btn btn-danger" id="rj-go"><i class="bi bi-send"></i> ตีกลับ</button>', onOpen: function (h) { $('#rj-go', h).addEventListener('click', function () { var rs = $('#rj-reason', h).value.trim(); if (rs.length < 3) { toast('กรุณาระบุเหตุผล', 'warning'); return; } runBtn($('#rj-go', h), { loading: 'กำลังส่ง…', ok: 'ตีกลับสื่อแล้ว' }, function () { return call('resource.reject', { id: id, reason: rs }); }).then(function () { Modal.close(); refreshCurrent(); }).catch(function () {}); }); } });
+  };
+  A['rd-feature'] = function (e) { var id = e.getAttribute('data-id'); runBtn(e, { loading: '…' }, function () { return call('resource.feature', { id: id }); }).then(function () { Modal.close(); openRes(id); refreshCurrent(); }).catch(function () {}); };
+  A['rd-edit'] = function (e) { var id = e.getAttribute('data-id'); Modal.close(); location.hash = '#/upload?id=' + id; };
+  A['rd-delete'] = function (e) {
+    var id = e.getAttribute('data-id');
+    confirmModal({ title: 'ลบสื่อ', message: 'ต้องการลบสื่อนี้ถาวรหรือไม่? การลบไม่สามารถกู้คืนได้', okText: 'ลบ', danger: true }).then(function (ok) {
+      if (!ok) return;
+      call('resource.delete', { id: id }).then(function () { Modal.close(); toast('ลบสื่อแล้ว', 'success'); refreshCurrent(); }).catch(function (er) { toast(er.message, 'error', 4500); });
+    });
+  };
+  function refreshCurrent() { if (alive()) T.dispatch(); }
+
+  /* ════════ DASHBOARD ════════ */
+  R['#/dashboard'] = function () {
+    page(skDash());
+    call('resource.stats', {}).then(function (d) { if (!alive()) return; renderDash(d); }).catch(function (e) { if (alive()) page(emptyHtml('bi-wifi-off', 'โหลดข้อมูลไม่สำเร็จ', e.message)); });
+  };
+  function skDash() {
+    return '<div class="page-wrap"><div class="sk" style="height:120px;border-radius:22px;margin-bottom:18px"></div><div class="kpi-grid">' + Array(6).join('x').split('x').map(function () { return '<div class="sk" style="height:110px;border-radius:18px"></div>'; }).join('') + '</div><div class="sk" style="height:240px;border-radius:20px"></div></div>';
+  }
+  function kpi(icon, color, val, label, sub) {
+    return '<div class="kpi"><div class="ic" style="' + gradStyle(color) + '"><i class="bi ' + icon + '"></i></div><div class="v">' + fmtNum(val) + '</div><div class="l">' + esc(label) + '</div>' + (sub ? '<div class="sub">' + esc(sub) + '</div>' : '') + '</div>';
+  }
+  function renderDash(d) {
+    var u = Store.user || {};
+    var viewAll = d.view_all;
+    var kpis = viewAll
+      ? kpi('bi-collection', '#0a84ff', d.by_status.approved || 0, 'สื่อเผยแพร่', 'ทั้งหมด ' + fmtNum(d.total))
+        + kpi('bi-hourglass-split', '#ff9f0a', d.pending, 'รออนุมัติ', '')
+        + kpi('bi-download', '#34c759', d.total_downloads, 'ดาวน์โหลดรวม', '')
+        + kpi('bi-eye', '#bf5af2', d.total_views, 'ยอดเข้าชม', '')
+        + kpi('bi-people', '#ff375f', d.teachers, 'ครูผู้ใช้', '')
+        + kpi('bi-star-half', '#febc2e', d.avg_rating, 'คะแนนเฉลี่ย', '')
+      : kpi('bi-folder', '#0a84ff', d.mine, 'สื่อของฉัน', d.mine_approved + ' เผยแพร่')
+        + kpi('bi-download', '#34c759', d.my_downloads, 'ยอดดาวน์โหลด', '')
+        + kpi('bi-collection', '#bf5af2', d.by_status.approved || 0, 'สื่อในคลัง', '')
+        + kpi('bi-heart', '#ff375f', d.favorites, 'รายการโปรด', '')
+        + kpi('bi-hourglass', '#ff9f0a', d.by_status.pending || 0, 'รออนุมัติ', '')
+        + kpi('bi-star-half', '#febc2e', d.avg_rating, 'คะแนนเฉลี่ย', '');
+
+    var actions = actionGrid();
+    var statusItems = [
+      { label: 'เผยแพร่แล้ว', value: d.by_status.approved || 0, color: '#34c759' },
+      { label: 'รออนุมัติ', value: d.by_status.pending || 0, color: '#ff9f0a' },
+      { label: 'ฉบับร่าง', value: d.by_status.draft || 0, color: '#94a3b8' },
+      { label: 'ตีกลับ', value: d.by_status.rejected || 0, color: '#ff453a' }
+    ].filter(function (x) { return x.value > 0; });
+
+    var topRes = (d.top_resources || []).slice(0, 5).map(function (r, i) {
+      return '<div class="lrow" data-act="res-open" data-id="' + esc(r.id) + '" style="cursor:pointer"><div class="medal medal-' + (i < 3 ? (i + 1) : 'n') + '">' + (i + 1) + '</div><div class="lb"><b>' + esc(r.title) + '</b><small><i class="bi ' + esc(r.category_icon) + '"></i> ' + esc(r.category_label) + '</small></div><div class="lv">' + fmtNum(r.downloads) + '</div></div>';
+    }).join('') || emptyHtml('bi-collection', 'ยังไม่มีสื่อ', '');
+
+    var contrib = (d.top_contributors || []).map(function (c, i) {
+      return '<div class="lrow"><div class="medal medal-' + (i < 3 ? (i + 1) : 'n') + '">' + (i + 1) + '</div>' + avatarHtml(c.name, c.avatar) + '<div class="lb"><b>' + esc(c.name) + '</b><small>' + esc(c.subject_group || '') + '</small></div><div class="lv">' + c.count + '</div></div>';
+    }).join('') || emptyHtml('bi-people', 'ยังไม่มีข้อมูล', '');
+
+    var recent = (d.recent || []).slice(0, 6).map(resRow).join('') || emptyHtml('bi-clock', 'ยังไม่มีสื่อล่าสุด', '');
+
+    page('<div class="page-wrap">'
+      + '<div class="hero-pro"><div class="hp-top">' + avatarHtml(u.full_name, u.avatar, 'lg') + '<div class="hp-greet"><h1>' + greet() + ', ' + esc((u.full_name || '').split(' ')[0]) + '</h1><p>' + TH.dateFull(new Date()) + '</p></div></div>'
+      + '<div class="hp-badges"><span class="hp-badge">' + roleChip(u.role, (Store.boot.roles && Store.boot.roles[u.role]) || u.role) + '</span>'
+      + (viewAll && d.pending ? '<span class="hp-badge"><i class="bi bi-bell"></i> รออนุมัติ ' + d.pending + ' รายการ</span>' : '')
+      + '<span class="hp-badge"><i class="bi bi-collection"></i> ' + fmtNum(d.by_status.approved || 0) + ' สื่อในคลัง</span></div></div>'
+      + '<div class="kpi-grid">' + kpis + '</div>'
+      + '<div class="action-grid">' + actions + '</div>'
+      + '<div class="grid2"><div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-graph-up"></i></div><h3>แนวโน้ม 14 วัน</h3></div>' + svgLine(d.trend) + '</div>'
+      + '<div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-pie-chart"></i></div><h3>สถานะสื่อ</h3></div>' + svgDonut(statusItems) + '</div></div>'
+      + '<div class="grid2"><div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-bar-chart"></i></div><h3>ตามกลุ่มสาระ</h3></div>' + barRows(d.cat_bars) + '</div>'
+      + '<div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-collection"></i></div><h3>ตามประเภทสื่อ</h3></div>' + barRows(d.type_bars) + '</div></div>'
+      + '<div class="grid2"><div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-trophy"></i></div><h3>สื่อยอดนิยม</h3></div>' + topRes + '</div>'
+      + '<div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-people"></i></div><h3>ครูที่แบ่งปันมากที่สุด</h3></div>' + contrib + '</div></div>'
+      + '<div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-clock-history"></i></div><h3>สื่อล่าสุด</h3><a class="btn btn-soft btn-sm" href="#/library"><i class="bi bi-arrow-right"></i> ดูทั้งหมด</a></div><div class="res-list">' + recent + '</div></div>'
+      + '</div>');
+    setTimeout(function () { $$('.bar-fill').forEach(function (b) { var w = b.style.width; b.style.width = '0'; setTimeout(function () { b.style.width = w; }, 50); }); }, 60);
+  }
+  function actionGrid() {
+    var items = [
+      { hash: '#/library', icon: 'bi-collection', label: 'คลังสื่อ', color: '#0a84ff', cap: 'resource.view_all' },
+      { hash: '#/upload', icon: 'bi-cloud-upload', label: 'เพิ่มสื่อ', color: '#34c759', cap: 'resource.create' },
+      { hash: '#/mine', icon: 'bi-folder-symlink', label: 'สื่อของฉัน', color: '#5e5ce6', cap: 'resource.create' },
+      { hash: '#/favorites', icon: 'bi-heart', label: 'รายการโปรด', color: '#ff375f', cap: 'favorite.manage' },
+      { hash: '#/approval', icon: 'bi-check2-square', label: 'รออนุมัติ', color: '#ff9f0a', cap: 'resource.approve' },
+      { hash: '#/reports', icon: 'bi-bar-chart', label: 'รายงาน', color: '#bf5af2', cap: 'report.view_own' },
+      { hash: '#/users', icon: 'bi-people', label: 'ผู้ใช้', color: '#ff453a', cap: 'user.view_all|user.manage' },
+      { hash: '#/master', icon: 'bi-diagram-3', label: 'ข้อมูลหลัก', color: '#1aafc6', cap: 'master.view|master.manage' },
+      { hash: '#/settings', icon: 'bi-gear', label: 'ตั้งค่า', color: '#64748b', cap: 'setting.manage' },
+      { hash: '#/profile', icon: 'bi-person-circle', label: 'โปรไฟล์', color: '#0a84ff', cap: '*' }
+    ].filter(function (it) { return hasCap(it.cap); });
+    return items.map(function (it) { return '<a class="act-tile" href="' + it.hash + '"><div class="ic" style="' + gradStyle(it.color) + '"><i class="bi ' + it.icon + '"></i></div><b>' + esc(it.label) + '</b></a>'; }).join('');
+  }
+
+  /* ════════ LIBRARY (+ mine + favorites) ════════ */
+  var LIB = { scope: 'all', q: '', category: '', level: '', type: '', status: '', sort: 'recent', view: 'grid', page: 1 };
+  function libPage(scope, title) {
+    LIB = { scope: scope, q: '', category: '', level: '', type: '', status: '', sort: 'recent', view: LIB.view || 'grid', page: 1 };
+    page('<div class="page-wrap">' + libToolbar() + '<div id="lib-results">' + skCards(8) + '</div><div id="lib-pager"></div></div>');
+    wireLibToolbar();
+    libFetch();
+  }
+  R['#/library'] = function () { libPage('all'); };
+  R['#/mine'] = function () { libPage('mine'); };
+  R['#/favorites'] = function () { libPage('favorites'); };
+
+  function libToolbar() {
+    var cats = bootCats(), lvls = bootLevels(), types = bootTypes();
+    var showStatus = LIB.scope === 'mine';
+    return '<div class="toolbar">'
+      + '<div class="tb-input grow"><i class="bi bi-search"></i><input id="lib-q" placeholder="ค้นหาสื่อ ชื่อ คำอธิบาย แท็ก…" value="' + esc(LIB.q) + '"></div>'
+      + selFilter('lib-cat', 'ทุกกลุ่มสาระ', cats, LIB.category)
+      + selFilter('lib-lvl', 'ทุกระดับชั้น', lvls, LIB.level)
+      + selFilter('lib-type', 'ทุกประเภท', types, LIB.type)
+      + (showStatus ? '<select class="select" id="lib-status" style="max-width:150px"><option value="">ทุกสถานะ</option><option value="approved">เผยแพร่</option><option value="pending">รออนุมัติ</option><option value="draft">ร่าง</option><option value="rejected">ตีกลับ</option></select>' : '')
+      + '<select class="select" id="lib-sort" style="max-width:140px"><option value="recent">ล่าสุด</option><option value="popular">ดาวน์โหลดมาก</option><option value="rating">คะแนนสูง</option><option value="views">เข้าชมมาก</option></select>'
+      + '<div class="seg"><button data-act="lib-grid" class="' + (LIB.view === 'grid' ? 'on' : '') + '"><i class="bi bi-grid-3x3-gap"></i></button><button data-act="lib-list" class="' + (LIB.view === 'list' ? 'on' : '') + '"><i class="bi bi-list-ul"></i></button></div>'
+      + (hasCap('resource.create') ? '<a class="btn btn-primary" href="#/upload"><i class="bi bi-plus-lg"></i> เพิ่มสื่อ</a>' : '')
+      + '</div>';
+  }
+  function selFilter(id, ph, opts, val) {
+    return '<select class="select" id="' + id + '" style="max-width:170px"><option value="">' + ph + '</option>' + opts.map(function (o) { return '<option value="' + esc(o.key) + '"' + (o.key === val ? ' selected' : '') + '>' + esc(o.label) + '</option>'; }).join('') + '</select>';
+  }
+  function wireLibToolbar() {
+    var q = $('#lib-q'); if (q) { var tmr; q.addEventListener('input', function () { clearTimeout(tmr); tmr = setTimeout(function () { LIB.q = q.value; LIB.page = 1; libFetch(); }, 300); }); }
+    bind('#lib-cat', function (v) { LIB.category = v; }); bind('#lib-lvl', function (v) { LIB.level = v; });
+    bind('#lib-type', function (v) { LIB.type = v; }); bind('#lib-status', function (v) { LIB.status = v; }); bind('#lib-sort', function (v) { LIB.sort = v; });
+    function bind(sel, fn) { var e = $(sel); if (e) e.addEventListener('change', function () { fn(e.value); LIB.page = 1; libFetch(); }); }
+  }
+  A['lib-grid'] = function (e) { LIB.view = 'grid'; $$('.seg button').forEach(function (b) { b.classList.remove('on'); }); e.classList.add('on'); libRender(); };
+  A['lib-list'] = function (e) { LIB.view = 'list'; $$('.seg button').forEach(function (b) { b.classList.remove('on'); }); e.classList.add('on'); libRender(); };
+  var LIB_DATA = null;
+  function libFetch() {
+    var res = $('#lib-results'); if (res) res.innerHTML = skCards(8);
+    call('resource.list', { scope: LIB.scope, q: LIB.q, category: LIB.category, level: LIB.level, type: LIB.type, status: LIB.status, sort: LIB.sort, page: LIB.page, per: 24 })
+      .then(function (d) { if (!$('#lib-results')) return; LIB_DATA = d; libRender(); })
+      .catch(function (e) { if ($('#lib-results')) $('#lib-results').innerHTML = emptyHtml('bi-wifi-off', 'โหลดไม่สำเร็จ', e.message); });
+  }
+  function libRender() {
+    if (!LIB_DATA) return;
+    var res = $('#lib-results'); if (!res) return;
+    var items = LIB_DATA.items || [];
+    if (!items.length) { res.innerHTML = emptyHtml('bi-search', 'ไม่พบสื่อที่ค้นหา', 'ลองปรับตัวกรองหรือคำค้น', hasCap('resource.create') ? '<a class="btn btn-primary" href="#/upload"><i class="bi bi-plus-lg"></i> เพิ่มสื่อใหม่</a>' : ''); $('#lib-pager').innerHTML = ''; return; }
+    res.innerHTML = LIB.view === 'grid' ? '<div class="res-grid">' + items.map(resCard).join('') + '</div>' : '<div class="res-list">' + items.map(resRow).join('') + '</div>';
+    $('#lib-pager').innerHTML = pagerHtml(LIB_DATA.page, LIB_DATA.pages, 'lib');
+  }
+  function pagerHtml(cur, pages, ns) {
+    if (pages <= 1) return '';
+    var h = '<div class="pager"><button data-act="' + ns + '-pg" data-p="' + (cur - 1) + '"' + (cur <= 1 ? ' disabled' : '') + '><i class="bi bi-chevron-left"></i></button>';
+    var from = Math.max(1, cur - 2), to = Math.min(pages, cur + 2);
+    if (from > 1) h += '<button data-act="' + ns + '-pg" data-p="1">1</button>' + (from > 2 ? '<span style="color:var(--muted)">…</span>' : '');
+    for (var i = from; i <= to; i++) h += '<button data-act="' + ns + '-pg" data-p="' + i + '" class="' + (i === cur ? 'on' : '') + '">' + i + '</button>';
+    if (to < pages) h += (to < pages - 1 ? '<span style="color:var(--muted)">…</span>' : '') + '<button data-act="' + ns + '-pg" data-p="' + pages + '">' + pages + '</button>';
+    h += '<button data-act="' + ns + '-pg" data-p="' + (cur + 1) + '"' + (cur >= pages ? ' disabled' : '') + '><i class="bi bi-chevron-right"></i></button></div>';
+    return h;
+  }
+  A['lib-pg'] = function (e) { LIB.page = +e.getAttribute('data-p'); libFetch(); var c = $('.content'); if (c) c.scrollTop = 0; };
+
+  /* ════════ APPROVAL ════════ */
+  R['#/approval'] = function () {
+    if (!hasCap('resource.approve')) { page(emptyHtml('bi-lock', 'ไม่มีสิทธิ์เข้าถึง', '')); return; }
+    page('<div class="page-wrap"><div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-hourglass-split"></i></div><h3>สื่อรออนุมัติ</h3></div><div id="ap-list">' + skCards(4) + '</div></div></div>');
+    call('resource.list', { scope: 'pending', per: 60, sort: 'recent' }).then(function (d) {
+      if (!$('#ap-list')) return;
+      var items = d.items || [];
+      $('#ap-list').innerHTML = items.length ? '<div class="res-grid">' + items.map(resCard).join('') + '</div>' : emptyHtml('bi-check2-circle', 'ไม่มีสื่อรออนุมัติ', 'ตรวจสอบทุกอย่างเรียบร้อยแล้ว');
+    }).catch(function (e) { if ($('#ap-list')) $('#ap-list').innerHTML = emptyHtml('bi-wifi-off', 'โหลดไม่สำเร็จ', e.message); });
+  };
+
+  /* ════════ UPLOAD WIZARD ════════ */
+  var WIZ = null;
+  R['#/upload'] = function (hash) {
+    if (!hasCap('resource.create')) { page(emptyHtml('bi-lock', 'ไม่มีสิทธิ์', '')); return; }
+    var id = (hash.split('?id=')[1] || '').split('&')[0];
+    WIZ = { step: 1, max: 1, id: id || null, data: { title: '', description: '', subject: '', tags: '', category: '', level: '', type: '', file_url: '', file_id: '', file_name: '', file_type: '', file_size: 0, thumbnail: '', external_url: '' } };
+    if (id) {
+      page('<div class="page-wrap"><div class="panel"><div style="text-align:center;padding:30px"><div class="spin-inline" style="border-color:rgba(10,132,255,.3);border-top-color:var(--accent);width:28px;height:28px"></div></div></div></div>');
+      call('resource.get', { id: id }).then(function (r) { if (!alive()) return; ['title', 'description', 'subject', 'tags', 'category', 'level', 'type', 'file_url', 'file_id', 'file_name', 'file_type', 'file_size', 'thumbnail', 'external_url'].forEach(function (k) { WIZ.data[k] = r[k] || (k === 'file_size' ? 0 : ''); }); WIZ.max = 4; renderWiz(); }).catch(function (e) { page(emptyHtml('bi-x-octagon', 'โหลดสื่อไม่สำเร็จ', e.message)); });
+    } else renderWiz();
+  };
+  var WIZ_STEPS = [['ข้อมูลพื้นฐาน', 'bi-card-text'], ['หมวดหมู่', 'bi-tags'], ['ไฟล์/ลิงก์', 'bi-cloud-upload'], ['ตรวจสอบ', 'bi-check2-circle']];
+  function renderWiz() {
+    var pct = (WIZ.step - 1) / 3 * 100;
+    var steps = WIZ_STEPS.map(function (s, i) {
+      var n = i + 1, st = n < WIZ.step ? 'done' : n === WIZ.step ? 'active' : '';
+      return '<div class="wiz-step ' + st + '"><div class="wiz-dot">' + (n < WIZ.step ? '<i class="bi bi-check-lg"></i>' : '<i class="bi ' + s[1] + '"></i>') + '</div><small>' + esc(s[0]) + '</small></div>';
+    }).join('');
+    page('<div class="page-wrap" style="max-width:780px"><div class="panel">'
+      + '<div class="wiz-steps"><div class="wiz-fill" style="width:calc((100% - 68px) * ' + (pct / 100) + ')"></div>' + steps + '</div>'
+      + '<div id="wiz-pane" class="wiz-pane">' + wizPane(WIZ.step) + '</div>'
+      + '<div class="wiz-nav"><button class="btn btn-ghost" data-act="wiz-prev"' + (WIZ.step === 1 ? ' style="visibility:hidden"' : '') + '><i class="bi bi-chevron-left"></i> ย้อนกลับ</button>'
+      + '<span class="pill">ขั้นที่ ' + WIZ.step + ' จาก 4</span>'
+      + (WIZ.step < 4 ? '<button class="btn btn-primary" data-act="wiz-next">ถัดไป <i class="bi bi-chevron-right"></i></button>' : '<button class="btn btn-success" id="wiz-save"><i class="bi bi-cloud-check"></i> ' + (WIZ.id ? 'บันทึกการแก้ไข' : 'เผยแพร่สื่อ') + '</button>')
+      + '</div></div></div>');
+    wireWiz();
+  }
+  function wizPane(step) {
+    var d = WIZ.data;
+    if (step === 1) return '<h3 style="font-family:Kanit;margin:0 0 14px"><i class="bi bi-card-text" style="color:var(--accent)"></i> ข้อมูลพื้นฐาน</h3>'
+      + '<div class="field"><label>ชื่อสื่อ <span class="req">*</span></label><input class="input" data-w="title" value="' + esc(d.title) + '" placeholder="เช่น ใบงานมาตราตัวสะกด ป.3"></div>'
+      + '<div class="field"><label>คำอธิบาย</label><textarea class="textarea" data-w="description" placeholder="อธิบายเนื้อหา วิธีใช้ จุดประสงค์…">' + esc(d.description) + '</textarea></div>'
+      + '<div class="row2"><div class="field"><label>วิชา/หัวข้อ</label><input class="input" data-w="subject" value="' + esc(d.subject) + '" placeholder="เช่น ภาษาไทย"></div>'
+      + '<div class="field"><label>แท็ก (คั่นด้วยจุลภาค)</label><input class="input" data-w="tags" value="' + esc(d.tags) + '" placeholder="ใบงาน, พร้อมใช้"></div></div>';
+    if (step === 2) return '<h3 style="font-family:Kanit;margin:0 0 14px"><i class="bi bi-tags" style="color:var(--accent)"></i> หมวดหมู่สื่อ</h3>'
+      + '<div class="field"><label>กลุ่มสาระการเรียนรู้ <span class="req">*</span></label><div class="opt-grid" id="w-cat">' + bootCats().map(function (c) { return '<div class="opt-card' + (d.category === c.key ? ' on' : '') + '" data-wo="category" data-k="' + esc(c.key) + '"><div class="ic" style="' + gradStyle(c.color) + '"><i class="bi ' + esc(c.icon) + '"></i></div><b>' + esc(c.label) + '</b></div>'; }).join('') + '</div></div>'
+      + '<div class="field"><label>ระดับชั้น <span class="req">*</span></label><select class="select" data-w="level"><option value="">— เลือกระดับชั้น —</option>' + bootLevels().map(function (l) { return '<option value="' + esc(l.key) + '"' + (d.level === l.key ? ' selected' : '') + '>' + esc(l.label) + '</option>'; }).join('') + '</select></div>'
+      + '<div class="field"><label>ประเภทสื่อ <span class="req">*</span></label><div class="opt-grid" id="w-type">' + bootTypes().map(function (t) { return '<div class="opt-card' + (d.type === t.key ? ' on' : '') + '" data-wo="type" data-k="' + esc(t.key) + '"><div class="ic" style="' + gradStyle(t.color) + '"><i class="bi ' + esc(t.icon) + '"></i></div><b>' + esc(t.label) + '</b></div>'; }).join('') + '</div></div>';
+    if (step === 3) return '<h3 style="font-family:Kanit;margin:0 0 14px"><i class="bi bi-cloud-upload" style="color:var(--accent)"></i> ไฟล์ หรือ ลิงก์สื่อ</h3>'
+      + '<div class="drop" id="w-drop"><div class="ic"><i class="bi bi-cloud-arrow-up"></i></div><b style="font-family:Kanit">คลิกเพื่อเลือกไฟล์ หรือลากไฟล์มาวาง</b><div style="font-size:12px;color:var(--muted);margin-top:4px">รองรับ PDF, รูปภาพ, เอกสาร · สูงสุด 25MB</div><input type="file" id="w-file" hidden></div>'
+      + '<div id="w-fileprev">' + (d.file_url || d.file_id ? filePrevHtml(d) : '') + '</div>'
+      + '<div style="text-align:center;color:var(--muted);font-size:12px;margin:14px 0">— หรือ —</div>'
+      + '<div class="field"><label><i class="bi bi-link-45deg"></i> ลิงก์สื่อภายนอก (Google Drive, YouTube, ฯลฯ)</label><input class="input" data-w="external_url" value="' + esc(d.external_url) + '" placeholder="https://"></div>'
+      + '<div class="field"><label><i class="bi bi-image"></i> ภาพหน้าปก (URL ไม่บังคับ)</label><input class="input" data-w="thumbnail" value="' + esc(d.thumbnail) + '" placeholder="https://"></div>';
+    // step 4
+    var cat = bootCats().filter(function (c) { return c.key === d.category; })[0] || {};
+    var typ = bootTypes().filter(function (t) { return t.key === d.type; })[0] || {};
+    return '<h3 style="font-family:Kanit;margin:0 0 14px"><i class="bi bi-check2-circle" style="color:var(--accent)"></i> ตรวจสอบข้อมูล</h3>'
+      + '<div class="wiz-review">'
+      + revRow('ชื่อสื่อ', d.title || '-') + revRow('คำอธิบาย', d.description || '-') + revRow('วิชา', d.subject || '-')
+      + revRow('กลุ่มสาระ', cat.label || '-') + revRow('ระดับชั้น', lvlLabel(d.level) || '-') + revRow('ประเภท', typ.label || '-')
+      + revRow('ไฟล์', d.file_name || (d.external_url ? 'ลิงก์ภายนอก' : '-')) + revRow('แท็ก', d.tags || '-')
+      + '</div>'
+      + '<div style="background:var(--tint);border-radius:12px;padding:13px;margin-top:14px;font-size:13px;color:var(--accent-d)"><i class="bi bi-info-circle"></i> ' + (hasCap('resource.approve') ? 'สื่อจะถูกเผยแพร่ทันทีหลังบันทึก' : 'สื่อจะถูกส่งให้ครูวิชาการตรวจสอบก่อนเผยแพร่') + '</div>';
+  }
+  function revRow(k, v) { return '<div class="rr"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div></div>'; }
+  function filePrevHtml(d) {
+    return '<div class="file-prev"><div class="fi"><i class="bi bi-file-earmark-check"></i></div><div style="flex:1;min-width:0"><b style="font-family:Kanit;font-size:13.5px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(d.file_name || 'ไฟล์แนบ') + '</b><small style="color:var(--muted)">' + (d.file_size ? fmtBytes(d.file_size) : 'แนบแล้ว') + '</small></div><button class="btn btn-icon btn-ghost" data-act="wiz-rmfile"><i class="bi bi-x-lg"></i></button></div>';
+  }
+  function wireWiz() {
+    $$('#wiz-pane [data-w]').forEach(function (i) { i.addEventListener('input', function () { WIZ.data[i.getAttribute('data-w')] = i.value; }); i.addEventListener('change', function () { WIZ.data[i.getAttribute('data-w')] = i.value; }); });
+    $$('#wiz-pane [data-wo]').forEach(function (c) { c.addEventListener('click', function () { var f = c.getAttribute('data-wo'); WIZ.data[f] = c.getAttribute('data-k'); $$('[data-wo="' + f + '"]').forEach(function (x) { x.classList.remove('on'); }); c.classList.add('on'); }); });
+    var drop = $('#w-drop'), file = $('#w-file');
+    if (drop && file) {
+      drop.addEventListener('click', function () { file.click(); });
+      drop.addEventListener('dragover', function (e) { e.preventDefault(); drop.classList.add('over'); });
+      drop.addEventListener('dragleave', function () { drop.classList.remove('over'); });
+      drop.addEventListener('drop', function (e) { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) doUpload(e.dataTransfer.files[0]); });
+      file.addEventListener('change', function () { if (file.files[0]) doUpload(file.files[0]); });
+    }
+    var save = $('#wiz-save'); if (save) save.addEventListener('click', wizSave);
+  }
+  function doUpload(f) {
+    if (f.size > 25 * 1024 * 1024) { toast('ไฟล์ใหญ่เกิน 25MB', 'warning'); return; }
+    Spinner.show('กำลังอัปโหลดไฟล์', { stages: ['กำลังอ่านไฟล์…', 'กำลังส่งขึ้นเซิร์ฟเวอร์…', 'กำลังเตรียมลิงก์…'] });
+    var rd = new FileReader();
+    rd.onload = function () {
+      call('file.upload', { data: rd.result, mime: f.type || 'application/octet-stream', name: f.name, folder: 'resources' }, 120000)
+        .then(function (res) {
+          Spinner.hide();
+          WIZ.data.file_url = res.url; WIZ.data.file_id = res.id; WIZ.data.file_name = res.name; WIZ.data.file_type = res.mime; WIZ.data.file_size = res.size;
+          if (res.is_image && !WIZ.data.thumbnail) WIZ.data.thumbnail = res.thumbnail;
+          var pv = $('#w-fileprev'); if (pv) pv.innerHTML = filePrevHtml(WIZ.data);
+          var th = $('[data-w="thumbnail"]'); if (th && res.is_image) th.value = WIZ.data.thumbnail;
+          toast('อัปโหลดไฟล์สำเร็จ', 'success');
+        }).catch(function (e) { Spinner.hide(); toast(e.message, 'error', 4500); });
+    };
+    rd.onerror = function () { Spinner.hide(); toast('อ่านไฟล์ไม่สำเร็จ', 'error'); };
+    rd.readAsDataURL(f);
+  }
+  A['wiz-rmfile'] = function () { WIZ.data.file_url = ''; WIZ.data.file_id = ''; WIZ.data.file_name = ''; WIZ.data.file_size = 0; var pv = $('#w-fileprev'); if (pv) pv.innerHTML = ''; };
+  function wizValidate(step) {
+    var d = WIZ.data;
+    if (step === 1 && (!d.title || d.title.trim().length < 3)) { toast('กรุณากรอกชื่อสื่ออย่างน้อย 3 ตัวอักษร', 'warning'); return false; }
+    if (step === 2) { if (!d.category) { toast('กรุณาเลือกกลุ่มสาระ', 'warning'); return false; } if (!d.level) { toast('กรุณาเลือกระดับชั้น', 'warning'); return false; } if (!d.type) { toast('กรุณาเลือกประเภทสื่อ', 'warning'); return false; } }
+    if (step === 3 && !d.file_url && !d.external_url) { toast('กรุณาแนบไฟล์หรือใส่ลิงก์', 'warning'); return false; }
+    return true;
+  }
+  A['wiz-next'] = function () { if (!wizValidate(WIZ.step)) return; WIZ.step++; WIZ.max = Math.max(WIZ.max, WIZ.step); renderWiz(); };
+  A['wiz-prev'] = function () { WIZ.step--; renderWiz(); };
+  function wizSave() {
+    for (var s = 1; s <= 3; s++) if (!wizValidate(s)) { WIZ.step = s; renderWiz(); return; }
+    var payload = {}; Object.keys(WIZ.data).forEach(function (k) { payload[k] = WIZ.data[k]; });
+    payload.submit = true; if (WIZ.id) payload.id = WIZ.id;
+    runBtn($('#wiz-save'), { loading: 'กำลังบันทึก…', success: 'สำเร็จ!' }, function () { return call('resource.save', payload); })
+      .then(function (res) {
+        Modal.open({ title: '', size: '', html: '<div style="text-align:center;padding:14px"><div style="width:72px;height:72px;border-radius:50%;background:linear-gradient(135deg,#34c759,#30b0c7);color:#fff;display:flex;align-items:center;justify-content:center;font-size:38px;margin:0 auto 14px"><i class="bi bi-check-lg"></i></div><h2 style="font-family:Kanit;margin:0 0 6px">' + (WIZ.id ? 'บันทึกสำเร็จ!' : (res.status === 'approved' ? 'เผยแพร่สำเร็จ!' : 'ส่งสื่อสำเร็จ!')) + '</h2><p style="color:var(--muted2);margin:0 0 18px">' + (res.status === 'pending' ? 'สื่อของคุณถูกส่งให้ครูวิชาการตรวจสอบแล้ว' : 'สื่อพร้อมใช้งานในคลังแล้ว') + '</p></div>', footer: '<button class="btn btn-ghost" data-act="wiz-done-lib">ไปที่คลังสื่อ</button><button class="btn btn-primary" data-act="wiz-done-mine">ดูสื่อของฉัน</button>' });
+      }).catch(function () {});
+  }
+  A['wiz-done-lib'] = function () { Modal.close(); location.hash = '#/library'; };
+  A['wiz-done-mine'] = function () { Modal.close(); location.hash = '#/mine'; };
+
+  /* ════════ USERS ════════ */
+  var USR = { q: '', role: '' };
+  R['#/users'] = function () {
+    if (!hasCap('user.view_all|user.manage')) { page(emptyHtml('bi-lock', 'ไม่มีสิทธิ์', '')); return; }
+    page('<div class="page-wrap"><div class="toolbar"><div class="tb-input grow"><i class="bi bi-search"></i><input id="usr-q" placeholder="ค้นหาผู้ใช้…"></div>'
+      + '<select class="select" id="usr-role" style="max-width:160px"><option value="">ทุกบทบาท</option><option value="admin">ผู้ดูแลระบบ</option><option value="academic">ครูวิชาการ</option><option value="teacher">ครูผู้สอน</option></select>'
+      + (hasCap('user.manage') ? '<button class="btn btn-primary" data-act="usr-add"><i class="bi bi-person-plus"></i> เพิ่มผู้ใช้</button>' : '') + '</div>'
+      + '<div id="usr-list"><div class="sk" style="height:300px;border-radius:16px"></div></div></div>');
+    var q = $('#usr-q'), tmr; if (q) q.addEventListener('input', function () { clearTimeout(tmr); tmr = setTimeout(function () { USR.q = q.value; usrFetch(); }, 300); });
+    var r = $('#usr-role'); if (r) r.addEventListener('change', function () { USR.role = r.value; usrFetch(); });
+    usrFetch();
+  };
+  function usrFetch() {
+    call('user.list', { q: USR.q, role: USR.role }).then(function (d) {
+      if (!$('#usr-list')) return;
+      if (!d.items.length) { $('#usr-list').innerHTML = emptyHtml('bi-people', 'ไม่พบผู้ใช้', ''); return; }
+      var canM = hasCap('user.manage');
+      $('#usr-list').innerHTML = '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>ผู้ใช้</th><th>บทบาท</th><th>กลุ่มสาระ</th><th>สื่อ</th><th>สถานะ</th><th>เข้าใช้ล่าสุด</th>' + (canM ? '<th></th>' : '') + '</tr></thead><tbody>'
+        + d.items.map(function (u) {
+          return '<tr><td><div class="cell-u">' + avatarHtml(u.full_name, u.avatar) + '<div><b style="font-family:Kanit">' + esc(u.full_name) + '</b><div style="font-size:11.5px;color:var(--muted)">@' + esc(u.username) + '</div></div></div></td>'
+            + '<td>' + roleChip(u.role, u.role_label) + '</td><td style="font-size:12.5px;color:var(--muted2)">' + esc(u.subject_group || '-') + '</td>'
+            + '<td><b style="color:var(--accent)">' + fmtNum(u.resources) + '</b></td>'
+            + '<td>' + (u.is_active === 'yes' ? '<span class="badge b-approved"><i class="bi bi-check-circle-fill"></i> ใช้งาน</span>' : '<span class="badge b-rejected">ปิด</span>') + '</td>'
+            + '<td style="font-size:12px;color:var(--muted)">' + (u.last_login ? TH.smart(u.last_login) : '-') + '</td>'
+            + (canM ? '<td style="text-align:right;white-space:nowrap"><button class="btn btn-icon btn-ghost btn-sm" data-act="usr-edit" data-id="' + esc(u.id) + '"><i class="bi bi-pencil"></i></button> <button class="btn btn-icon btn-ghost btn-sm" data-act="usr-reset" data-id="' + esc(u.id) + '" title="รีเซ็ตรหัสผ่าน"><i class="bi bi-key"></i></button> <button class="btn btn-icon btn-ghost btn-sm" data-act="usr-toggle" data-id="' + esc(u.id) + '" title="' + (u.is_active === 'yes' ? 'ปิด' : 'เปิด') + 'บัญชี"><i class="bi bi-' + (u.is_active === 'yes' ? 'pause' : 'play') + '-circle"></i></button></td>' : '') + '</tr>';
+        }).join('') + '</tbody></table></div>';
+    }).catch(function (e) { if ($('#usr-list')) $('#usr-list').innerHTML = emptyHtml('bi-wifi-off', 'โหลดไม่สำเร็จ', e.message); });
+  }
+  A['usr-add'] = function () { usrForm(null); };
+  A['usr-edit'] = function (e) { call('user.get', { id: e.getAttribute('data-id') }).then(usrForm).catch(function (er) { toast(er.message, 'error'); }); };
+  function usrForm(u) {
+    u = u || {};
+    var isNew = !u.id;
+    Modal.open({
+      title: isNew ? 'เพิ่มผู้ใช้' : 'แก้ไขผู้ใช้', titleIcon: isNew ? 'bi-person-plus' : 'bi-pencil', size: '',
+      html: '<div class="field"><label>ชื่อ-สกุล <span class="req">*</span></label><input class="input" id="u-name" value="' + esc(u.full_name || '') + '"></div>'
+        + (isNew ? '<div class="row2"><div class="field"><label>ชื่อผู้ใช้ <span class="req">*</span></label><input class="input" id="u-username" pattern="[-a-z0-9_.]{3,30}" placeholder="a-z 0-9 _ ."></div><div class="field"><label>รหัสผ่าน <span class="req">*</span></label><input class="input" id="u-pw" type="text" placeholder="อย่างน้อย 6 ตัว"></div></div>' : '')
+        + '<div class="row2"><div class="field"><label>บทบาท</label><select class="select" id="u-role"><option value="teacher"' + (u.role === 'teacher' ? ' selected' : '') + '>ครูผู้สอน</option><option value="academic"' + (u.role === 'academic' ? ' selected' : '') + '>ครูวิชาการ</option><option value="admin"' + (u.role === 'admin' ? ' selected' : '') + '>ผู้ดูแลระบบ</option></select></div>'
+        + '<div class="field"><label>กลุ่มสาระ</label><input class="input" id="u-sg" value="' + esc(u.subject_group || '') + '"></div></div>'
+        + '<div class="row2"><div class="field"><label>อีเมล</label><input class="input" id="u-email" value="' + esc(u.email || '') + '"></div><div class="field"><label>เบอร์โทร</label><input class="input" id="u-phone" value="' + esc(u.phone || '') + '"></div></div>'
+        + '<div class="row2"><div class="field"><label>ตำแหน่ง</label><input class="input" id="u-pos" value="' + esc(u.position || '') + '"></div><div class="field"><label>โรงเรียน</label><input class="input" id="u-school" value="' + esc(u.school || '') + '"></div></div>'
+        + '<label class="lf-check" style="margin-top:4px"><input type="checkbox" id="u-active"' + (u.is_active !== 'no' ? ' checked' : '') + '> เปิดใช้งานบัญชี</label>',
+      footer: '<button class="btn btn-ghost" data-modal-close>ยกเลิก</button><button class="btn btn-primary" id="u-save"><i class="bi bi-check-lg"></i> บันทึก</button>',
+      onOpen: function (h) {
+        $('#u-save', h).addEventListener('click', function () {
+          var payload = { id: u.id || '', full_name: val('#u-name'), role: val('#u-role'), subject_group: val('#u-sg'), email: val('#u-email'), phone: val('#u-phone'), position: val('#u-pos'), school: val('#u-school'), is_active: $('#u-active', h).checked ? 'yes' : 'no', avatar: u.avatar || '' };
+          if (isNew) { payload.username = val('#u-username'); payload.password = val('#u-pw'); }
+          function val(s) { var e = $(s, h); return e ? e.value.trim() : ''; }
+          runBtn($('#u-save', h), { loading: 'กำลังบันทึก…', ok: 'บันทึกผู้ใช้สำเร็จ' }, function () { return call('user.save', payload); }).then(function () { Modal.close(); usrFetch(); }).catch(function () {});
+        });
+      }
+    });
+  }
+  A['usr-toggle'] = function (e) { call('user.toggle', { id: e.getAttribute('data-id') }).then(function () { toast('อัปเดตสถานะแล้ว', 'success'); usrFetch(); }).catch(function (er) { toast(er.message, 'error', 4500); }); };
+  A['usr-reset'] = function (e) {
+    confirmModal({ title: 'รีเซ็ตรหัสผ่าน', message: 'ระบบจะสร้างรหัสผ่านชั่วคราวให้ผู้ใช้นี้', okText: 'รีเซ็ต' }).then(function (ok) {
+      if (!ok) return;
+      call('user.reset_password', { id: e.getAttribute('data-id') }).then(function (res) {
+        Modal.open({ title: 'รหัสผ่านใหม่', titleIcon: 'bi-key', html: '<p style="font-size:14px;color:var(--ink2)">รหัสผ่านชั่วคราว (แจ้งผู้ใช้และให้เปลี่ยนทันที):</p><div style="background:var(--tint);border-radius:12px;padding:16px;text-align:center;font-family:monospace;font-size:22px;font-weight:700;color:var(--accent-d);letter-spacing:1px">' + esc(res.temp_password) + '</div>', footer: '<button class="btn btn-primary" data-modal-close>เข้าใจแล้ว</button>' });
+      }).catch(function (er) { toast(er.message, 'error', 4500); });
+    });
+  };
+
+  /* ════════ MASTER ════════ */
+  var MST = { kind: 'category' };
+  R['#/master'] = function () {
+    if (!hasCap('master.view|master.manage')) { page(emptyHtml('bi-lock', 'ไม่มีสิทธิ์', '')); return; }
+    page('<div class="page-wrap"><div class="seg" style="margin-bottom:16px"><button data-act="mst-tab" data-k="category" class="' + (MST.kind === 'category' ? 'on' : '') + '">กลุ่มสาระ</button><button data-act="mst-tab" data-k="level" class="' + (MST.kind === 'level' ? 'on' : '') + '">ระดับชั้น</button><button data-act="mst-tab" data-k="restype" class="' + (MST.kind === 'restype' ? 'on' : '') + '">ประเภทสื่อ</button></div><div id="mst-list"><div class="sk" style="height:300px;border-radius:16px"></div></div></div>');
+    mstFetch();
+  };
+  A['mst-tab'] = function (e) { MST.kind = e.getAttribute('data-k'); $$('[data-act="mst-tab"]').forEach(function (b) { b.classList.remove('on'); }); e.classList.add('on'); mstFetch(); };
+  function mstFetch() {
+    call('master.list', { kind: MST.kind }).then(function (d) {
+      if (!$('#mst-list')) return;
+      var canM = hasCap('master.manage');
+      var rows = d.items.map(function (it) {
+        return '<tr><td>' + (d.has_icon ? '<div style="display:flex;align-items:center;gap:9px"><div style="width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;' + gradStyle(it.color) + '"><i class="bi ' + esc(it.icon) + '"></i></div><b style="font-family:Kanit">' + esc(it.label) + '</b></div>' : '<b style="font-family:Kanit">' + esc(it.label) + '</b>') + '</td>'
+          + '<td style="font-family:monospace;color:var(--muted2);font-size:12px">' + esc(it.key) + '</td>'
+          + '<td><b style="color:var(--accent)">' + fmtNum(it.usage) + '</b> สื่อ</td>'
+          + '<td>' + (it.is_active === 'yes' ? '<span class="badge b-approved">ใช้งาน</span>' : '<span class="badge b-draft">ปิด</span>') + '</td>'
+          + (canM ? '<td style="text-align:right;white-space:nowrap"><button class="btn btn-icon btn-ghost btn-sm" data-act="mst-edit" data-id="' + esc(it.id) + '"><i class="bi bi-pencil"></i></button> <button class="btn btn-icon btn-ghost btn-sm" data-act="mst-toggle" data-id="' + esc(it.id) + '"><i class="bi bi-' + (it.is_active === 'yes' ? 'eye-slash' : 'eye') + '"></i></button> <button class="btn btn-icon btn-ghost btn-sm" data-act="mst-del" data-id="' + esc(it.id) + '" style="color:var(--danger)"><i class="bi bi-trash"></i></button></td>' : '') + '</tr>';
+      }).join('');
+      $('#mst-list').innerHTML = '<div class="panel" style="padding:14px"><div class="panel-h"><div class="ic"><i class="bi bi-diagram-3"></i></div><h3>' + esc(d.label) + '</h3>' + (canM ? '<button class="btn btn-primary btn-sm" data-act="mst-add"><i class="bi bi-plus-lg"></i> เพิ่ม</button>' : '') + '</div>'
+        + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>ชื่อ</th><th>รหัส</th><th>การใช้งาน</th><th>สถานะ</th>' + (canM ? '<th></th>' : '') + '</tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+      MST.has_icon = d.has_icon;
+    }).catch(function (e) { if ($('#mst-list')) $('#mst-list').innerHTML = emptyHtml('bi-wifi-off', 'โหลดไม่สำเร็จ', e.message); });
+  }
+  A['mst-add'] = function () { mstForm(null); };
+  A['mst-edit'] = function (e) { call('master.list', { kind: MST.kind }).then(function (d) { var it = d.items.filter(function (x) { return x.id === e.getAttribute('data-id'); })[0]; mstForm(it); }); };
+  function mstForm(it) {
+    it = it || {};
+    var icons = ['bi-tag', 'bi-journal-text', 'bi-easel2', 'bi-file-earmark-text', 'bi-play-btn', 'bi-image', 'bi-pencil-square', 'bi-clipboard-check', 'bi-controller', 'bi-collection', 'bi-translate', 'bi-calculator', 'bi-rocket-takeoff', 'bi-globe-asia-australia', 'bi-heart-pulse', 'bi-palette', 'bi-tools', 'bi-compass'];
+    var colors = ['#0a84ff', '#5e5ce6', '#bf5af2', '#ff375f', '#ff9500', '#34c759', '#1aafc6', '#ef4444', '#ec4899', '#8b5cf6', '#64748b'];
+    var hasIcon = MST.has_icon;
+    Modal.open({
+      title: (it.id ? 'แก้ไข' : 'เพิ่ม') + 'รายการ', titleIcon: 'bi-diagram-3', size: '',
+      html: '<div class="field"><label>ชื่อ <span class="req">*</span></label><input class="input" id="m-label" value="' + esc(it.label || '') + '"></div>'
+        + '<div class="field"><label>รหัส (key) <span class="req">*</span></label><input class="input" id="m-key" value="' + esc(it.key || '') + '" ' + (it.id ? '' : 'placeholder="a-z 0-9 _ -"') + '><div class="field-hint">ใช้อ้างอิงในระบบ (แก้ไม่ได้ถ้ามีการใช้งานแล้ว)</div></div>'
+        + (hasIcon ? '<div class="field"><label>ไอคอน</label><div id="m-icons" style="display:grid;grid-template-columns:repeat(9,1fr);gap:6px">' + icons.map(function (ic) { return '<div class="opt-card" data-mic="' + ic + '" style="padding:8px;border-radius:10px' + (it.icon === ic ? ';border-color:var(--accent);background:var(--tint)' : '') + '"><i class="bi ' + ic + '" style="font-size:18px"></i></div>'; }).join('') + '</div></div>'
+          + '<div class="field"><label>สี</label><div id="m-colors" style="display:flex;gap:7px;flex-wrap:wrap">' + colors.map(function (c) { return '<div data-mcol="' + c + '" style="width:32px;height:32px;border-radius:9px;cursor:pointer;background:' + c + ';border:3px solid ' + (it.color === c ? 'var(--ink)' : 'transparent') + '"></div>'; }).join('') + '</div></div>' : '')
+        + '<div class="row2"><div class="field"><label>ลำดับ</label><input class="input" type="number" id="m-order" value="' + (it.sort_order || 99) + '"></div><div class="field" style="display:flex;align-items:flex-end"><label class="lf-check"><input type="checkbox" id="m-active"' + (it.is_active !== 'no' ? ' checked' : '') + '> เปิดใช้งาน</label></div></div>',
+      footer: '<button class="btn btn-ghost" data-modal-close>ยกเลิก</button><button class="btn btn-primary" id="m-save"><i class="bi bi-check-lg"></i> บันทึก</button>',
+      onOpen: function (h) {
+        var icon = it.icon || 'bi-tag', color = it.color || '#64748b';
+        $$('[data-mic]', h).forEach(function (c) { c.addEventListener('click', function () { icon = c.getAttribute('data-mic'); $$('[data-mic]', h).forEach(function (x) { x.style.borderColor = 'var(--line)'; x.style.background = 'var(--panel)'; }); c.style.borderColor = 'var(--accent)'; c.style.background = 'var(--tint)'; }); });
+        $$('[data-mcol]', h).forEach(function (c) { c.addEventListener('click', function () { color = c.getAttribute('data-mcol'); $$('[data-mcol]', h).forEach(function (x) { x.style.borderColor = 'transparent'; }); c.style.borderColor = 'var(--ink)'; }); });
+        $('#m-save', h).addEventListener('click', function () {
+          var payload = { kind: MST.kind, id: it.id || '', label: $('#m-label', h).value.trim(), key: $('#m-key', h).value.trim().toLowerCase(), sort_order: $('#m-order', h).value, is_active: $('#m-active', h).checked ? 'yes' : 'no' };
+          if (hasIcon) { payload.icon = icon; payload.color = color; }
+          runBtn($('#m-save', h), { loading: 'กำลังบันทึก…', ok: 'บันทึกสำเร็จ' }, function () { return call('master.upsert', payload); }).then(function () { Modal.close(); mstFetch(); refreshBoot(); }).catch(function () {});
+        });
+      }
+    });
+  }
+  A['mst-toggle'] = function (e) { call('master.toggle', { kind: MST.kind, id: e.getAttribute('data-id') }).then(function () { mstFetch(); refreshBoot(); }).catch(function (er) { toast(er.message, 'error'); }); };
+  A['mst-del'] = function (e) { confirmModal({ title: 'ลบรายการ', message: 'ต้องการลบรายการนี้?', okText: 'ลบ', danger: true }).then(function (ok) { if (!ok) return; call('master.delete', { kind: MST.kind, id: e.getAttribute('data-id') }).then(function () { toast('ลบแล้ว', 'success'); mstFetch(); refreshBoot(); }).catch(function (er) { toast(er.message, 'error', 4500); }); }); };
+
+  /* ════════ REPORTS ════════ */
+  var RPT = { tab: 'overview', teacher: '' };
+  R['#/reports'] = function () {
+    if (!hasCap('report.view_own')) { page(emptyHtml('bi-lock', 'ไม่มีสิทธิ์', '')); return; }
+    var canAll = hasCap('report.view_all');
+    if (!canAll) { RPT.tab = 'teacher'; RPT.teacher = Store.user.id; rptTeacher(); return; }
+    page('<div class="page-wrap"><div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap" class="sd-no-print"><div class="seg"><button data-act="rpt-tab" data-k="overview" class="' + (RPT.tab === 'overview' ? 'on' : '') + '">ภาพรวม</button><button data-act="rpt-tab" data-k="teacher" class="' + (RPT.tab === 'teacher' ? 'on' : '') + '">รายบุคคล</button></div><button class="btn btn-ghost btn-sm" data-act="rpt-print" style="margin-left:auto"><i class="bi bi-printer"></i> พิมพ์ PDF</button></div><div id="rpt-body"><div class="sk" style="height:400px;border-radius:18px"></div></div></div>');
+    if (RPT.tab === 'overview') rptOverview(); else rptTeacher();
+  };
+  A['rpt-tab'] = function (e) { RPT.tab = e.getAttribute('data-k'); R['#/reports'](); };
+  A['rpt-print'] = function () { window.print(); };
+  function rptOverview() {
+    var body = $('#rpt-body'); if (body) body.innerHTML = '<div class="sk" style="height:400px;border-radius:18px"></div>';
+    call('report.overview', {}).then(function (d) {
+      if (!$('#rpt-body')) return;
+      var kpis = '<div class="kpi-grid">' + kpi('bi-collection', '#0a84ff', d.total, 'สื่อทั้งหมด', '') + kpi('bi-check-circle', '#34c759', d.approved, 'เผยแพร่แล้ว', '') + kpi('bi-download', '#bf5af2', d.total_downloads, 'ดาวน์โหลด', '') + kpi('bi-percent', '#ff9500', d.completion_rate + '%', 'อัตราอนุมัติ', '') + '</div>';
+      var statusD = [{ label: 'เผยแพร่', value: d.by_status.approved || 0, color: '#34c759' }, { label: 'รออนุมัติ', value: d.by_status.pending || 0, color: '#ff9f0a' }, { label: 'ร่าง', value: d.by_status.draft || 0, color: '#94a3b8' }, { label: 'ตีกลับ', value: d.by_status.rejected || 0, color: '#ff453a' }].filter(function (x) { return x.value; });
+      var teachers = (d.teachers || []).map(function (t, i) {
+        return '<tr data-act="rpt-pick" data-id="' + esc(t.id) + '" style="cursor:pointer"><td><div class="cell-u"><div class="medal medal-' + (i < 3 ? (i + 1) : 'n') + '">' + (i + 1) + '</div>' + avatarHtml(t.name, t.avatar) + '<b style="font-family:Kanit">' + esc(t.name) + '</b></div></td><td>' + esc(t.subject_group || '-') + '</td><td><b style="color:var(--accent)">' + t.total + '</b></td><td>' + t.approved + '</td><td><b style="color:' + (t.rate >= 70 ? '#34c759' : t.rate >= 40 ? '#ff9500' : '#ff453a') + '">' + t.rate + '%</b></td><td>' + fmtNum(t.downloads) + '</td><td style="font-size:12px;color:var(--muted)">' + TH.smart(t.last) + '</td></tr>';
+      }).join('');
+      $('#rpt-body').innerHTML = kpis
+        + '<div class="grid2"><div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-graph-up"></i></div><h3>แนวโน้ม 14 วัน</h3></div>' + svgLine(d.trend) + '</div><div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-pie-chart"></i></div><h3>สถานะสื่อ</h3></div>' + svgDonut(statusD) + '</div></div>'
+        + '<div class="grid2"><div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-bar-chart"></i></div><h3>ตามกลุ่มสาระ</h3></div>' + barRows(d.cat_bars) + '</div><div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-mortarboard"></i></div><h3>ตามระดับชั้น</h3></div>' + barRows(d.level_bars) + '</div></div>'
+        + '<div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-trophy"></i></div><h3>อันดับครูผู้แบ่งปันสื่อ</h3></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>ครู</th><th>กลุ่มสาระ</th><th>สื่อ</th><th>เผยแพร่</th><th>อัตรา</th><th>ดาวน์โหลด</th><th>ล่าสุด</th></tr></thead><tbody>' + (teachers || '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:24px">ยังไม่มีข้อมูล</td></tr>') + '</tbody></table></div></div>'
+        + '<div style="text-align:center;color:var(--muted);font-size:11.5px;margin-top:10px">รายงานสร้างเมื่อ ' + TH.dateTime(d.generated_at) + '</div>';
+      setTimeout(function () { $$('.bar-fill').forEach(function (b) { var w = b.style.width; b.style.width = '0'; setTimeout(function () { b.style.width = w; }, 50); }); }, 60);
+    }).catch(function (e) { if ($('#rpt-body')) $('#rpt-body').innerHTML = emptyHtml('bi-wifi-off', 'โหลดไม่สำเร็จ', e.message); });
+  }
+  A['rpt-pick'] = function (e) { RPT.tab = 'teacher'; RPT.teacher = e.getAttribute('data-id'); R['#/reports'](); };
+  function rptTeacher() {
+    var canAll = hasCap('report.view_all');
+    var body = $('#rpt-body') || $('#page');
+    if (!canAll) page('<div class="page-wrap"><div id="rpt-body"><div class="sk" style="height:400px;border-radius:18px"></div></div></div>');
+    if (canAll && !RPT.teacher) RPT.teacher = Store.user.id;
+    var selWrap = '';
+    if (canAll) {
+      call('report.teachers', {}).then(function (tl) {
+        var sel = $('#rpt-sel'); if (sel) return;
+      });
+    }
+    var b = $('#rpt-body'); if (b) b.innerHTML = '<div class="sk" style="height:400px;border-radius:18px"></div>';
+    Promise.all([call('report.teacher', { teacher_id: RPT.teacher }), canAll ? call('report.teachers', {}) : Promise.resolve({ items: [] })]).then(function (arr) {
+      var d = arr[0], tl = arr[1];
+      var bb = $('#rpt-body'); if (!bb) return;
+      var t = d.teacher;
+      var selector = canAll ? '<div class="panel sd-no-print" style="padding:13px"><div style="display:flex;align-items:center;gap:10px"><i class="bi bi-person-vcard" style="font-size:20px;color:var(--accent)"></i><span style="font-weight:600;font-family:Kanit">เลือกครู:</span><select class="select" id="rpt-sel" style="flex:1">' + (tl.items || []).map(function (x) { return '<option value="' + esc(x.id) + '"' + (x.id === RPT.teacher ? ' selected' : '') + '>' + esc(x.name) + ' · ' + esc(x.subject_group || '-') + ' (' + x.count + ')</option>'; }).join('') + '</select></div></div>' : '';
+      var statusD = [{ label: 'เผยแพร่', value: d.by_status.approved || 0, color: '#34c759' }, { label: 'รออนุมัติ', value: d.by_status.pending || 0, color: '#ff9f0a' }, { label: 'ร่าง', value: d.by_status.draft || 0, color: '#94a3b8' }, { label: 'ตีกลับ', value: d.by_status.rejected || 0, color: '#ff453a' }].filter(function (x) { return x.value; });
+      bb.innerHTML = selector
+        + '<div class="panel"><div style="display:flex;align-items:center;gap:14px">' + avatarHtml(t.name, t.avatar, 'lg') + '<div><h2 style="font-family:Kanit;margin:0;font-size:19px">' + esc(t.name) + '</h2><div style="color:var(--muted2);font-size:13px">' + roleChip(t.role, (Store.boot.roles && Store.boot.roles[t.role]) || t.role) + ' · ' + esc(t.subject_group || '-') + '</div></div></div></div>'
+        + '<div class="kpi-grid">' + kpi('bi-collection', '#0a84ff', d.total, 'สื่อทั้งหมด', '') + kpi('bi-check-circle', '#34c759', d.approved, 'เผยแพร่', '') + kpi('bi-download', '#bf5af2', d.total_downloads, 'ดาวน์โหลด', '') + kpi('bi-eye', '#ff9500', d.total_views, 'เข้าชม', '') + kpi('bi-folder', '#1aafc6', d.subjects, 'กลุ่มสาระ', '') + '</div>'
+        + '<div class="grid2"><div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-pie-chart"></i></div><h3>สถานะสื่อ</h3></div>' + svgDonut(statusD) + '</div><div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-bar-chart"></i></div><h3>ตามกลุ่มสาระ</h3></div>' + barRows(d.cat_bars) + '</div></div>'
+        + '<div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-collection"></i></div><h3>สื่อล่าสุด</h3></div><div class="res-list">' + ((d.recent || []).map(resRow).join('') || emptyHtml('bi-folder', 'ยังไม่มีสื่อ', '')) + '</div></div>'
+        + '<div style="text-align:center;color:var(--muted);font-size:11.5px;margin-top:10px">รายงานสร้างเมื่อ ' + TH.dateTime(d.generated_at) + '</div>';
+      var sel = $('#rpt-sel'); if (sel) sel.addEventListener('change', function () { RPT.teacher = sel.value; rptTeacher(); });
+    }).catch(function (e) { var bb = $('#rpt-body'); if (bb) bb.innerHTML = emptyHtml('bi-wifi-off', 'โหลดไม่สำเร็จ', e.message); });
+  }
+
+  /* ════════ AUDIT ════════ */
+  var AUD = { q: '', action: '', page: 1 };
+  R['#/audit'] = function () {
+    if (!hasCap('audit.view_all')) { page(emptyHtml('bi-lock', 'ไม่มีสิทธิ์', '')); return; }
+    page('<div class="page-wrap"><div class="toolbar"><div class="tb-input grow"><i class="bi bi-search"></i><input id="aud-q" placeholder="ค้นหาบันทึก…"></div></div><div id="aud-list"><div class="sk" style="height:300px;border-radius:16px"></div></div><div id="aud-pager"></div></div>');
+    var q = $('#aud-q'), tmr; if (q) q.addEventListener('input', function () { clearTimeout(tmr); tmr = setTimeout(function () { AUD.q = q.value; AUD.page = 1; audFetch(); }, 300); });
+    audFetch();
+  };
+  function audFetch() {
+    call('audit.list', { q: AUD.q, action: AUD.action, page: AUD.page }).then(function (d) {
+      if (!$('#aud-list')) return;
+      if (!d.items.length) { $('#aud-list').innerHTML = emptyHtml('bi-clock-history', 'ไม่มีบันทึก', ''); $('#aud-pager').innerHTML = ''; return; }
+      $('#aud-list').innerHTML = '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>เวลา</th><th>ผู้ใช้</th><th>การกระทำ</th><th>รายการ</th></tr></thead><tbody>'
+        + d.items.map(function (a) { return '<tr><td style="font-size:12px;color:var(--muted2);white-space:nowrap">' + TH.dateTime(a.created_at) + '</td><td><b style="font-family:Kanit">' + esc(a.username || '-') + '</b></td><td>' + esc(a.action_label) + '</td><td style="font-size:12px;color:var(--muted)">' + esc(a.entity) + (a.entity_id ? ' · ' + esc(String(a.entity_id).substring(0, 8)) : '') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+      $('#aud-pager').innerHTML = pagerHtml(d.page, d.pages, 'aud');
+    }).catch(function (e) { if ($('#aud-list')) $('#aud-list').innerHTML = emptyHtml('bi-wifi-off', 'โหลดไม่สำเร็จ', e.message); });
+  }
+  A['aud-pg'] = function (e) { AUD.page = +e.getAttribute('data-p'); audFetch(); };
+
+  /* ════════ SETTINGS ════════ */
+  R['#/settings'] = function () {
+    if (!hasCap('setting.manage')) { page(emptyHtml('bi-lock', 'ไม่มีสิทธิ์', '')); return; }
+    page('<div class="page-wrap"><div class="sk" style="height:400px;border-radius:18px"></div></div>');
+    call('setting.get', {}).then(function (d) { if (!alive()) return; renderSettings(d.settings); }).catch(function (e) { page(emptyHtml('bi-wifi-off', 'โหลดไม่สำเร็จ', e.message)); });
+  };
+  function renderSettings(s) {
+    var themes = [['blue', '#0a84ff'], ['indigo', '#5e5ce6'], ['teal', '#1aafc6'], ['green', '#2eb84f'], ['orange', '#ff9500'], ['pink', '#ff375f'], ['graphite', '#5b6573']];
+    page('<div class="page-wrap" style="max-width:760px">'
+      + '<div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-building"></i></div><h3>ข้อมูลโรงเรียน</h3></div>'
+      + sField('ชื่อโรงเรียน', 'org_name', s.org_name) + sField('ที่อยู่', 'org_address', s.org_address) + sField('เบอร์โทร', 'org_phone', s.org_phone)
+      + sImageField('โลโก้โรงเรียน', 'org_logo', s.org_logo, 'bi-building') + '</div>'
+      + '<div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-window-stack"></i></div><h3>หน้าแลนดิ้ง</h3></div>'
+      + sField('หัวข้อหลัก', 'hero_title', s.hero_title) + sField('คำโปรย', 'hero_subtitle', s.hero_subtitle)
+      + sImageField('ภาพพื้นหลัง Hero (ไม่บังคับ)', 'hero_image', s.hero_image, 'bi-image', 'wide') + '</div>'
+      + '<div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-palette"></i></div><h3>ธีมสี</h3></div><div class="theme-row" id="theme-row">' + themes.map(function (t) { return '<div class="theme-dot' + (s.theme === t[0] ? ' on' : '') + '" data-theme-pick="' + t[0] + '" style="background:linear-gradient(135deg,' + t[1] + ',' + T.shade(t[1], -25) + ')"></div>'; }).join('') + '</div><input type="hidden" id="set-theme" value="' + esc(s.theme || 'blue') + '"></div>'
+      + '<div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-toggles"></i></div><h3>การทำงานระบบ</h3></div>'
+      + sToggle('แสดงบัญชีทดลองในหน้า Login', 'show_demo_users', s.show_demo_users, 'แนะนำให้ปิดก่อนใช้งานจริง')
+      + sToggle('แสดงปุ่มคู่มือในหน้า Login', 'show_user_manual', s.show_user_manual)
+      + sToggle('เปิดให้ครูสมัครสมาชิกเอง', 'allow_self_register', s.allow_self_register)
+      + sToggle('สื่อต้องผ่านการอนุมัติก่อนเผยแพร่', 'require_approval', s.require_approval, 'ปิด = ครูทุกคนเผยแพร่ได้ทันที') + '</div>'
+      + '<div class="panel"><div class="panel-h"><div class="ic"><i class="bi bi-telegram"></i></div><h3>แจ้งเตือน Telegram</h3></div>'
+      + sToggle('เปิดใช้งานแจ้งเตือน', 'tg_enabled', s.tg_enabled)
+      + sField('Bot Token', 'tg_token', s.tg_token) + sField('Admin Chat IDs (คั่นด้วยจุลภาค)', 'tg_admin_chat_ids', s.tg_admin_chat_ids)
+      + '<div style="display:flex;gap:8px;margin-top:6px"><button class="btn btn-ghost btn-sm" data-act="tg-me"><i class="bi bi-robot"></i> ตรวจบอท</button><button class="btn btn-ghost btn-sm" data-act="tg-updates"><i class="bi bi-people"></i> ดู Chat IDs</button><button class="btn btn-ghost btn-sm" data-act="tg-test"><i class="bi bi-send"></i> ทดสอบ</button></div></div>'
+      + '<div style="display:flex;gap:10px;position:sticky;bottom:0;padding:14px 0;background:linear-gradient(transparent,var(--panel3) 30%)"><button class="btn btn-primary btn-lg btn-block" id="set-save"><i class="bi bi-cloud-check"></i> บันทึกการตั้งค่า</button></div>'
+      + '</div>');
+    $$('[data-theme-pick]').forEach(function (d) { d.addEventListener('click', function () { var t = d.getAttribute('data-theme-pick'); $('#set-theme').value = t; $$('.theme-dot').forEach(function (x) { x.classList.remove('on'); }); d.classList.add('on'); document.documentElement.setAttribute('data-theme', t); }); });
+    $('#set-save').addEventListener('click', settingsSave);
+    wireImageFields();
+  }
+  function sField(label, key, val) { return '<div class="field"><label>' + esc(label) + '</label><input class="input" data-set="' + key + '" value="' + esc(val || '') + '"></div>'; }
+  function sImageField(label, key, val, ph, sz) {
+    return '<div class="field"><label>' + esc(label) + '</label><div class="img-field" data-imgfield="' + key + '">'
+      + '<div class="img-prev' + (val ? '' : ' empty') + (sz ? ' ' + sz : '') + '" id="imgp-' + key + '">' + (val ? '<img src="' + esc(val) + '" referrerpolicy="no-referrer" onerror="this.style.display=\'none\'">' : '<i class="bi ' + (ph || 'bi-image') + '"></i>') + '</div>'
+      + '<div class="img-actions"><button class="btn btn-soft btn-sm" data-act="img-pick" data-key="' + key + '"><i class="bi bi-upload"></i> อัปโหลดภาพ</button>'
+      + '<button class="btn btn-ghost btn-sm" data-act="img-clear" data-key="' + key + '"' + (val ? '' : ' hidden') + '><i class="bi bi-x-lg"></i> ลบ</button></div>'
+      + '<input type="file" accept="image/*" id="imgf-' + key + '" hidden><input type="hidden" data-set="' + key + '" id="imgv-' + key + '" value="' + esc(val || '') + '">'
+      + '</div><div class="field-hint">รองรับ JPG/PNG สูงสุด 5MB · จัดเก็บใน Drive และใช้ลิงก์ lh3</div></div>';
+  }
+  function wireImageFields() {
+    $$('[data-imgfield]').forEach(function (wrap) {
+      var k = wrap.getAttribute('data-imgfield'), f = $('#imgf-' + k); if (!f) return;
+      f.addEventListener('change', function () {
+        if (!f.files[0]) return;
+        var file = f.files[0];
+        if (file.size > 5 * 1024 * 1024) { toast('รูปใหญ่เกิน 5MB', 'warning'); return; }
+        Spinner.show('กำลังอัปโหลดภาพ', { stages: ['กำลังอ่านรูป…', 'กำลังบันทึกขึ้น Drive…', 'กำลังเตรียมลิงก์…'] });
+        var rd = new FileReader();
+        rd.onload = function () {
+          call('file.upload', { data: rd.result, mime: file.type, name: k + '_' + Date.now(), folder: 'branding' }, 90000)
+            .then(function (res) {
+              Spinner.hide();
+              var v = $('#imgv-' + k); if (v) v.value = res.url;
+              var p = $('#imgp-' + k); if (p) { p.classList.remove('empty'); p.innerHTML = '<img src="' + esc(res.url) + '" referrerpolicy="no-referrer">'; }
+              var clr = $('[data-act="img-clear"][data-key="' + k + '"]'); if (clr) clr.hidden = false;
+              toast('อัปโหลดรูปสำเร็จ', 'success');
+            }).catch(function (e) { Spinner.hide(); toast(e.message, 'error', 4500); });
+        };
+        rd.onerror = function () { Spinner.hide(); toast('อ่านรูปไม่สำเร็จ', 'error'); };
+        rd.readAsDataURL(file);
+      });
+    });
+  }
+  A['img-pick'] = function (e) { var f = $('#imgf-' + e.getAttribute('data-key')); if (f) f.click(); };
+  A['img-clear'] = function (e) { var k = e.getAttribute('data-key'); var v = $('#imgv-' + k); if (v) v.value = ''; var p = $('#imgp-' + k); if (p) { p.className = 'img-prev empty'; p.innerHTML = '<i class="bi bi-image"></i>'; } e.hidden = true; };
+  function sToggle(label, key, val, hint) { var on = String(val || '').toLowerCase() === 'yes'; return '<label class="lf-check" style="padding:8px 0;justify-content:space-between;cursor:pointer"><span><b style="font-family:Kanit;font-size:13.5px;color:var(--ink2)">' + esc(label) + '</b>' + (hint ? '<br><small style="color:var(--muted)">' + esc(hint) + '</small>' : '') + '</span><input type="checkbox" data-set-toggle="' + key + '"' + (on ? ' checked' : '') + ' style="width:20px;height:20px"></label>'; }
+  function settingsSave() {
+    var settings = {};
+    $$('[data-set]').forEach(function (i) { settings[i.getAttribute('data-set')] = i.value; });
+    $$('[data-set-toggle]').forEach(function (i) { settings[i.getAttribute('data-set-toggle')] = i.checked ? 'yes' : 'no'; });
+    var th = $('#set-theme'); if (th) settings.theme = th.value;
+    runBtn($('#set-save'), { loading: 'กำลังบันทึก…', success: 'บันทึกแล้ว!' }, function () { return call('setting.update', { settings: settings }); })
+      .then(function () { if (Store.boot) Store.boot.settings = Object.assign({}, Store.boot.settings, settings); T.applyTheme(); toast('บันทึกการตั้งค่าสำเร็จ', 'success'); }).catch(function () {});
+  }
+  A['tg-me'] = function (e) { runBtn(e, { loading: 'ตรวจสอบ…' }, function () { return call('tg.getMe', { token: tgToken() }); }).then(function (r) { Modal.open({ title: 'ข้อมูลบอท', titleIcon: 'bi-robot', html: '<p>เชื่อมต่อสำเร็จ ✓</p><p><b>ชื่อบอท:</b> ' + esc(r.name) + '</p><p><b>Username:</b> @' + esc(r.username) + '</p><p><a href="' + esc(r.link) + '" target="_blank" rel="noopener noreferrer" class="btn btn-soft btn-sm"><i class="bi bi-telegram"></i> เปิดแชตบอท</a></p>', footer: '<button class="btn btn-primary" data-modal-close>ปิด</button>' }); }).catch(function () {}); };
+  A['tg-updates'] = function (e) { runBtn(e, { loading: 'ดึงข้อมูล…' }, function () { return call('tg.getUpdates', { token: tgToken() }); }).then(function (r) { Modal.open({ title: 'Chat IDs ที่ทักบอท', titleIcon: 'bi-people', html: (r.chats || []).length ? r.chats.map(function (c) { return '<div class="file-prev"><div class="fi"><i class="bi bi-chat"></i></div><div style="flex:1"><b style="font-family:Kanit">' + esc(c.title) + '</b><div style="font-family:monospace;font-size:12px;color:var(--muted)">' + esc(c.id) + '</div></div></div>'; }).join('') : '<p style="color:var(--muted)">ยังไม่มีใครทักบอท — ให้ผู้ใช้ส่ง /start ไปยังบอทก่อน</p>', footer: '<button class="btn btn-primary" data-modal-close>ปิด</button>' }); }).catch(function () {}); };
+  A['tg-test'] = function (e) { var tk = $('#set-save'); runBtn(e, { loading: 'กำลังส่ง…' }, function () { return call('setting.update', { settings: collectSettings() }).then(function () { return call('tg.test', {}); }); }).then(function (r) { toast('ส่งแล้ว ' + r.sent + '/' + r.total + ' chat', 'success'); }).catch(function () {}); };
+  function tgToken() { var e = $('[data-set="tg_token"]'); return e ? e.value : ''; }
+  function collectSettings() { var s = {}; $$('[data-set]').forEach(function (i) { s[i.getAttribute('data-set')] = i.value; }); $$('[data-set-toggle]').forEach(function (i) { s[i.getAttribute('data-set-toggle')] = i.checked ? 'yes' : 'no'; }); return s; }
+
+  /* ════════ PROFILE ════════ */
+  R['#/profile'] = function () {
+    var u = Store.user || {};
+    page('<div class="page-wrap" style="max-width:680px"><div class="panel">'
+      + '<div style="display:flex;align-items:center;gap:16px;margin-bottom:18px">' + avatarHtml(u.full_name, u.avatar, 'xl') + '<div><h2 style="font-family:Kanit;margin:0;font-size:20px">' + esc(u.full_name) + '</h2><div style="color:var(--muted2)">' + roleChip(u.role, (Store.boot.roles && Store.boot.roles[u.role]) || u.role) + ' · @' + esc(u.username) + '</div><button class="btn btn-soft btn-sm" data-act="pf-avatar" style="margin-top:8px"><i class="bi bi-camera"></i> เปลี่ยนรูป</button><input type="file" id="pf-file" accept="image/*" hidden></div></div>'
+      + '<div class="row2"><div class="field"><label>ชื่อ-สกุล</label><input class="input" id="pf-name" value="' + esc(u.full_name || '') + '"></div><div class="field"><label>กลุ่มสาระ</label><input class="input" id="pf-sg" value="' + esc(u.subject_group || '') + '"></div></div>'
+      + '<div class="row2"><div class="field"><label>อีเมล</label><input class="input" id="pf-email" value="' + esc(u.email || '') + '"></div><div class="field"><label>เบอร์โทร</label><input class="input" id="pf-phone" value="' + esc(u.phone || '') + '"></div></div>'
+      + '<div class="row2"><div class="field"><label>ตำแหน่ง</label><input class="input" id="pf-pos" value="' + esc(u.position || '') + '"></div><div class="field"><label>โรงเรียน</label><input class="input" id="pf-school" value="' + esc(u.school || '') + '"></div></div>'
+      + '<div style="display:flex;gap:10px;margin-top:8px"><button class="btn btn-primary" id="pf-save"><i class="bi bi-check-lg"></i> บันทึกข้อมูล</button><button class="btn btn-ghost" data-act="change-pw"><i class="bi bi-key"></i> เปลี่ยนรหัสผ่าน</button></div>'
+      + '</div></div>');
+    var file = $('#pf-file'); if (file) file.addEventListener('change', function () { if (file.files[0]) pfAvatar(file.files[0]); });
+    $('#pf-save').addEventListener('click', function () {
+      var p = { full_name: gv('#pf-name'), subject_group: gv('#pf-sg'), email: gv('#pf-email'), phone: gv('#pf-phone'), position: gv('#pf-pos'), school: gv('#pf-school') };
+      function gv(s) { var e = $(s); return e ? e.value.trim() : ''; }
+      runBtn($('#pf-save'), { loading: 'กำลังบันทึก…', ok: 'บันทึกโปรไฟล์สำเร็จ' }, function () { return call('profile.update', p); }).then(function (res) { Store.user = res.user; try { localStorage.setItem('trl.session', JSON.stringify({ user: res.user, caps: Store.caps })); } catch (e) {} T.renderShell(); T.dispatch(); }).catch(function () {});
+    });
+  };
+  A['pf-avatar'] = function () { var f = $('#pf-file'); if (f) f.click(); };
+  function pfAvatar(f) {
+    if (f.size > 5 * 1024 * 1024) { toast('รูปใหญ่เกิน 5MB', 'warning'); return; }
+    Spinner.show('กำลังอัปโหลดรูป', { stages: ['กำลังอ่านรูป…', 'กำลังบันทึก…'] });
+    var rd = new FileReader();
+    rd.onload = function () { call('profile.avatar', { data: rd.result, mime: f.type }, 60000).then(function (res) { Spinner.hide(); Store.user = res.user; try { localStorage.setItem('trl.session', JSON.stringify({ user: res.user, caps: Store.caps })); } catch (e) {} T.renderShell(); T.dispatch(); toast('เปลี่ยนรูปสำเร็จ', 'success'); }).catch(function (e) { Spinner.hide(); toast(e.message, 'error', 4500); }); };
+    rd.readAsDataURL(f);
+  }
+})();
+</script>
