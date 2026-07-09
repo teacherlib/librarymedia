@@ -1,13 +1,3 @@
-/**
- * ═══════════════════════════════════════════════════════════════
- *  TRL · ระบบคลังสื่อการสอนสำหรับโรงเรียน
- *  File:        06_Settings.gs — Settings (EAV) · public/sensitive filtering
- *  Version:     1.0.0
- *  Last Update: 2026-06-19
- *  Developer:   ครูวิรัตน์ หาดคำ · www.kruwirat.com
- *  License:     Proprietary · © 2026
- * ═══════════════════════════════════════════════════════════════
- */
 
 function Settings_forceTextValueColumn_(sh) {
   try { sh.getRange(2, 2, Math.max(1, sh.getMaxRows() - 1), 1).setNumberFormat('@'); } catch (e) {}
